@@ -1,4 +1,8 @@
 # EzChem
-# EzChem is a python package used to solve problems in Chemistry. 
+# EzChem is a python package based on PyTorch. It can be used to solve problems in Chemistry, such as prediction of chemical reactions and physicochemical properties. 
 
-> Model
+## Model
+Todo
+
+## Data 
+Todo
