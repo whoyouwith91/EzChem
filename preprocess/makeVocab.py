@@ -6,10 +6,11 @@ import numpy as np
 import pandas as pd
 from featurization import *
 from sklearn.model_selection import train_test_split
-from tokenizers.implementations import ByteLevelBPETokenizer
+from tokenizers.implementations import MolTokenizer
 
 def parse_input_arguments():
     parser = argparse.ArgumentParser(description='VAE')
+    parser.add_argument('--data_path', type=str, choices=['zinc'])
     parser.add_argument('--dataset', type=str, choices=['zinc'])
     parser.add_argument('--save_path', type=str)
     return parser.parse_args()
@@ -17,21 +18,10 @@ def parse_input_arguments():
 
 def main():
     args = parse_input_arguments()
-    tokenizer = ByteLevelBPETokenizer()
-
-
-    ### This is only for training a new text base in order to obtain a vocab file. 
-    ### If you are done with this step, you should skip it. 
-    tokenizer.train(files=args.dataset, vocab_size=52000, min_frequency=2, special_tokens=[
-        "<s>",
-        "<pad>",
-        "</s>",
-        "<unk>",
-        "<mask>",
-    ])
-
+    tokenizer = MolTokenizer(source_files=os.path.join(args.data_path, args.dataset)) # this will help find all unique tokens. 
+    
     ### save out the vocab file 
-    tokenizer.save(args.save_path)
+    tokenizer.save_vocabulary(args.save_path) # currently, the vocab name is fixed in the moltokenizer script. you may need to change it.
 
     
 
