@@ -1573,6 +1573,7 @@ class VAE(nn.Module):
         self.fc01 =  nn.Linear(self.config['dimension'], self.config['dimension'])
         self.fc0 = nn.Linear(self.config['dimension'], self.config['varDimen'])
         self.fc1 = nn.Linear(self.config['dimension'], self.config['varDimen'])
+        #self.decode_latent = nn.Linear(self.config['varDimen'], self.config['dimension'])
         self.fc11 = nn.Linear(self.config['varDimen'], self.config['dimension'])
         self.fc2 = nn.Linear(self.config['dimension'], self.config['vocab_size'])
         self.fc3 = nn.Linear(self.config['dimension'], self.config['dimension'])
@@ -1598,21 +1599,28 @@ class VAE(nn.Module):
     
     def encode(self, x):
         srcEmbed = self.src_embedding(x.SRC)
+        bs = srcEmbed.shape[0]
         encEmbed = self.pe(srcEmbed)
         self.src_key_mask = (x.SRC == 1).to('cuda')
-        #seq_size = x.SRC.size()[1]
-        #self.src_atten_mask = self._generate_square_subsequent_mask(seq_size)
+        seq_size = x.SRC.size()[1]
+        self.src_atten_mask = self._generate_square_subsequent_mask(seq_size).to('cuda')
         output_encoder = self.encoder(src=encEmbed.transpose(0,1), \
-                                      #mask=self.src_atten_mask, \
+                                      mask=self.src_atten_mask, \
                               src_key_padding_mask=self.src_key_mask)
+        #seq_repr = output_encoder.transpose(0,1).mean(dim=1).view(bs, -1)
+        #mu, logvar = F.relu(self.fc00(seq_repr)), \
+        #             F.relu(self.fc01(seq_repr))
         mu, logvar = F.relu(self.fc00(output_encoder.transpose(0,1))), \
                      F.relu(self.fc01(output_encoder.transpose(0,1)))
         mu, logvar = self.fc0(mu), self.fc1(logvar)
-        
+ 
         return mu, logvar
     
     def decode(self, x, z):
+        bs = x.TRG.shape[0]
+        x.TRG = x.TRG.view(-1,)[x.TRG.view(-1,) != 3].view(bs, -1) # to achieve x.trg[:, :-1], slice off EOS
         seq_size = x.TRG.size()[1]
+        #z = z.repeat(1, seq_size, 1)
         normEmd = self.norm_layer(z)
         toDecoderEmbed = F.relu(self.fc11(normEmd))
         trgEmbed = self.trg_embedding(x.TRG)
@@ -1625,7 +1633,7 @@ class VAE(nn.Module):
                              #memory_mask=self.src_atten_mask, \
                              tgt_key_padding_mask = self.tgt_key_mask, \
                              memory_key_padding_mask=self.src_key_mask)
-        
+                             #)                     
         return output_decoder
     
     def get_z(self, x):
@@ -1634,12 +1642,115 @@ class VAE(nn.Module):
 
     def forward(self, data):
         mu, logvar = self.encode(data)
-        #print(mu.shape, logvar.shape)
+        bs = mu.shape[0]
         sample_z = self.reparameterize(mu, logvar).to('cuda')
+        #encoder_state = self.decode_latent(sample_z).view(bs, 1, -1)
         output_decoder = self.decode(data, sample_z)
         
         
         output = F.relu(self.fc3(output_decoder.transpose(0,1)))
         output = self.fc2(output)
 
-        return output.view(-1, self.config['vocab_size']), mu, logvar
+        return output, mu, logvar
+
+class VAE_rev(nn.Module):
+    def __init__(self, config):
+        '''
+        https://pytorch.org/docs/master/_modules/torch/nn/modules/transformer.html#TransformerEncoder
+        '''
+        super(VAE_rev, self).__init__()
+        self.config = config
+        self.src_embedding = nn.Embedding(self.config['vocab_size'], self.config['dimension'])
+        self.trg_embedding = nn.Embedding(self.config['vocab_size'], self.config['dimension'])
+
+        self.pe = PositionalEncoding(self.config['dropout'], self.config['dimension'])
+        
+        encoder_layer = nn.TransformerEncoderLayer(self.config['dimension'], self.config['numEncoLayers']) 
+        self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=self.config['numEncoders'])
+        decoder_layer = nn.TransformerDecoderLayer(self.config['dimension'], self.config['numDecoLayers'])
+        self.decoder = nn.TransformerDecoder(decoder_layer, num_layers=self.config['numDecoders'])
+        self.norm_layer = LayerNorm(self.config['dimension'])
+        
+        self.fc00 = nn.Linear(self.config['dimension'], self.config['dimension'])
+        self.fc01 =  nn.Linear(self.config['dimension'], self.config['dimension'])
+        self.fc0 = nn.Linear(self.config['dimension'], self.config['varDimen'])
+        self.fc1 = nn.Linear(self.config['dimension'], self.config['varDimen'])
+        self.decode_latent = nn.Linear(self.config['varDimen'], self.config['dimension'])
+        self.fc11 = nn.Linear(self.config['dimension'], self.config['dimension'])
+        self.fc2 = nn.Linear(self.config['dimension'], self.config['vocab_size'])
+        self.fc3 = nn.Linear(self.config['dimension'], self.config['dimension'])
+        
+
+    def _generate_square_subsequent_mask(self, sz):
+        # sz: length of seqeunce
+        mask = (torch.triu(torch.ones(sz, sz)) == 1).transpose(0, 1)
+        mask = mask.float().masked_fill(mask == 0, float('-inf')).masked_fill(mask == 1, float(0.0))
+        return mask
+
+    def reparameterize(self, mu, logvar):
+        if self.training:
+            # multiply log variance with 0.5, then in-place exponent
+            # yielding the standard deviation
+            std = logvar.mul(0.5).exp_()  # type: Variable
+            eps = Variable(std.data.new(std.size()).normal_())
+            sample_z = eps.mul(std).add_(mu)
+
+            return sample_z
+        else:
+            return mu
+    
+    def encode(self, x):
+        srcEmbed = self.src_embedding(x.SRC)
+        bs = srcEmbed.shape[0]
+        encEmbed = self.pe(srcEmbed)
+        self.src_key_mask = (x.SRC == 1).to('cuda')
+        seq_size = x.SRC.size()[1]
+        self.src_atten_mask = self._generate_square_subsequent_mask(seq_size).to('cuda')
+        output_encoder = self.encoder(src=encEmbed.transpose(0,1), \
+                                      mask=self.src_atten_mask, \
+                              src_key_padding_mask=self.src_key_mask)
+        seq_repr = output_encoder.transpose(0,1).mean(dim=1).view(bs, -1)
+        mu, logvar = F.relu(self.fc00(seq_repr)), \
+                     F.relu(self.fc01(seq_repr))
+        #mu, logvar = F.relu(self.fc00(output_encoder.transpose(0,1))), \
+        #             F.relu(self.fc01(output_encoder.transpose(0,1)))
+        mu, logvar = self.fc0(mu), self.fc1(logvar)
+ 
+        return mu, logvar
+    
+    def decode(self, x, z):
+        bs = x.TRG.shape[0]
+        x.TRG = x.TRG.view(-1,)[x.TRG.view(-1,) != 3].view(bs, -1) # to achieve x.trg[:, :-1], slice off EOS
+        seq_size = x.TRG.size()[1]
+        #z = z.repeat(1, seq_size, 1)
+        normEmd = self.norm_layer(z)
+        toDecoderEmbed = F.relu(self.fc11(normEmd))
+        trgEmbed = self.trg_embedding(x.TRG)
+        decEmbed = self.pe(trgEmbed)
+        self.tgt_key_mask = (x.TRG == 1).to('cuda')
+        self.tgt_atten_mask = self._generate_square_subsequent_mask(seq_size).to('cuda')
+        output_decoder = self.decoder(tgt=decEmbed.transpose(0,1), \
+                             tgt_mask=self.tgt_atten_mask, \
+                             memory=toDecoderEmbed.transpose(0,1), \
+                             #memory_mask=self.src_atten_mask, \
+                             tgt_key_padding_mask = self.tgt_key_mask, \
+                             #memory_key_padding_mask=self.src_key_mask)
+                             ) 
+        return output_decoder
+    
+    def get_z(self, x):
+        mu, logvar = self.encode(x)
+        return self.reparameterize(mu, logvar)
+
+    def forward(self, data):
+        mu, logvar = self.encode(data)
+        bs = mu.shape[0]
+        sample_z = self.reparameterize(mu, logvar).to('cuda')
+        encoder_state = self.decode_latent(sample_z).view(bs, 1, -1)
+        output_decoder = self.decode(data, encoder_state)
+        
+        
+        output = F.relu(self.fc3(output_decoder.transpose(0,1)))
+        output = self.fc2(output)
+
+        return output, mu, logvar
