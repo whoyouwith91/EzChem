@@ -39,4 +39,5 @@ pip install torchcontrib
 
 ## Data 
 - Why and how to prepare data files? 
-> Because 
+> Because it usually takes long time to process molecule datasets by reading the SMILES/InChI and generating corresponding molecular graphs. If the data processing and model training happen at same stage, training speed will slow down a lot, which is unnecessary. 
+> Before prepraring the data files, you should: 1. Get ready of the train/valid/test set in 'csv' format. First column stores SMILES, second column stores target values. 
