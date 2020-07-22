@@ -37,8 +37,5 @@ $ pip install hyperopt
 pip install torchcontrib
 ```
 
-## Model
-
-
 ## Data 
-Todo
+- How to prepare data files? 
