@@ -8,3 +8,17 @@ with open('/beegfs/dz1061/gcn/chemGraph/data/smiles/atom10_smiles.txt', 'w') as 
         if set(elements) < set(ALLOWABLE_ATOM_SYMBOLS):
             f.write(i)
             f.write('\n')
+            
+            from collections import Counter
+
+# create a vocabunary
+counter = Counter()
+
+with open('/beegfs/dz1061/gcn/chemGraph/data/smiles/atom10_smiles.txt') as rf:
+    for line in rf:
+        items = tokenizer.tokenize(line.strip())
+        counter.update(items)
+        #items = self._tokenize(line.strip())
+vocab = torchtext.vocab.Vocab(counter)
+
+torch.save(vocab, '/beegfs/dz1061/gcn/chemGraph/data/smiles/atom10_vocab.pt')
