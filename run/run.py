@@ -257,16 +257,27 @@ def main():
         # VAE 
         ####
         elif this_dic['model'] == 'VAE':
+            fklwei = 0
+            if this_dic['anneal_method'] == 'cyclical':
+                preKlWeights = torch.load('/beegfs/dz1061/gcn/chemGraph/data/zinc/klWeight/annealKlWeight.pt')
+            else:
+                preKlWeights = None
             for epoch in range(1, this_dic['epochs']+1):
                 saveContents = []
                 time_tic = time.time()
-                train_loss = train_VAE(model_, optimizer, train_loader, this_dic)
+                train_loss, klWeights, preKl = train_VAE(model_, optimizer, train_loader, this_dic, epoch, klwei, preKlWeights)
+                klwei = klWeights
+                if this_dic['anneal_method'] == 'cyclical':
+                    preKlWeights = preKl
                 time_toc = time.time()
-                val_loss = test_VAE(model_, val_loader, this_dic)
+                val_loss = test_VAE(model_, val_loader, this_dic, klwei)
+                if this_dic['lr_style'] == 'decay':
+                    scheduler.step(val_loss)
                 test_loss = 0.0
                 saveContents.append([model_, epoch, time_toc, time_tic, train_loss, val_loss, \
                    test_loss, param_norm(model_), grad_norm(model_)])
-                saveToResultsFile(this_dic, saveContents[0], name='data.txt')        
+                saveToResultsFile(this_dic, saveContents[0], name='data.txt')
+                best_val_error = saveModel(this_dic, epoch, model_, best_val_error, val_loss)  
         
         ####
         # properties prediction
