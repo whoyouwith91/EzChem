@@ -44,6 +44,8 @@ def get_model(config):
         return wlkernel_dropout
     if name == 'wlkernel_swag':
         return wlkernel_swag
+    if name == 'TransformerUnsuper':
+        return TransUnsuper
     if name == 'VAE':
         return VAE
     
@@ -141,7 +143,7 @@ class knn(torch.nn.Module):
             #self.f_water_2 = Linear(config['num_features'], config['dimension'])
             #self.water.append(self.f_water_2)
             if config['dataset'] in ['ccdc_logp', 'logp', 'ccdc_sollogp']:
-                self.embOct = torch.load('/beegfs/dz1061/datasets/logp/raw/octanol.pt')
+                self.embOct = torch.load('/beegfs/dz1061/gcn/chemGraph/data/OCTANOL/graphs/octanol.pt')['x']
                 self.f_Oct = Linear(config['num_features'], config['dimension'])
         if config['mol']: # molecular features
             self.mol = Linear(196, config['dimension'])
@@ -430,7 +432,18 @@ class LoopyBP(nn.Module):
 
         self.W_o = nn.Linear(self.atom_fdim + self.hidden_size, self.hidden_size)
         
-        fc0 = nn.Sequential(Linear(self.hidden_size, self.readout_size), self.fn, self.dropout)
+        if config['water_interaction']:
+            self.embWater = torch.load('/beegfs/dz1061/gcn/chemGraph/data/WATER/graphs/water.pt')['x']
+            self.f_water = Linear(config['num_features'], config['dimension'])
+            if config['dataset'] in ['ccdc_logp', 'logp', 'ccdc_sollogp']:
+                self.embOct = torch.load('/beegfs/dz1061/gcn/chemGraph/data/OCTANOL/graphs/octanol.pt')['x']
+                self.f_Oct = Linear(config['num_features'], config['dimension'])
+
+        if config['water_interaction']:
+            fc0 = nn.Sequential(Linear(self.hidden_size*2, self.readout_size), self.fn, self.dropout)
+        else:
+            fc0 = nn.Sequential(Linear(self.hidden_size, self.readout_size), self.fn, self.dropout)
+  
         self.out.append(fc0)
         
         for i in range(config['NumOutLayers']-2):
@@ -489,6 +502,27 @@ class LoopyBP(nn.Module):
         atom_hiddens = self.fn(self.W_o(a_input))  # num_atoms x hidden
         atom_hiddens = self.dropout(atom_hiddens)
         #atom_hiddens = self.dropout_layer(atom_hiddens)  # num_atoms x hidden
+        
+        if self.config['water_interaction']:
+            hidden_water = self.fn(self.f_water(self.embWater.cuda()))
+            interaction = torch.tanh(torch.mm(atom_hiddens, hidden_water.transpose(0, 1)))
+            solute_after_interaction = torch.mm(interaction, hidden_water)
+            if self.config['dataset'] in ['ccdc_sollogp', 'ccdc_logp', 'logp']:
+               hidden_oct = self.fn(self.f_Oct(self.embOct.cuda()))
+               interaction = torch.tanh(torch.mm(atom_hiddens, hidden_oct.transpose(0, 1)))
+               solute_after_oct = torch.mm(interaction, hidden_oct)
+            if self.config['InterByConcat']:
+               atom_hiddens = torch.cat([atom_hiddens, solute_after_interaction], 1) # dimension increase to 2 fold
+               if self.config['dataset'] in ['ccdc_logp', 'logp']:
+                   atom_hiddens = torch.cat([solute_after_oct, solute_after_interaction], 1) # dimension increase to 2 fold
+               if self.config['dataset'] == 'ccdc_sollogp':
+                   atom_hiddens = torch.cat([solute_after_oct, solute_after_interaction], 1)
+            if self.config['InterBySub']:
+               atom_hiddens = atom_hiddens - solute_after_interaction
+               if self.config['dataset'] == ['ccdc_logp', 'logp']:
+                  atom_hiddens = solute_after_oct - solute_after_interaction
+               if self.config['dataset'] == 'ccdc_sollogp':
+                  atom_hiddens = solute_after_oct - solute_after_interaction
 
         # Readout
         mol_vecs = []
@@ -689,7 +723,18 @@ class wlkernel(torch.nn.Module):
         self.fc_lei = nn.Linear(self.hidden_size+self.bond_fdim, self.hidden_size)
         self.fc_new_lei = nn.Linear(self.hidden_size*2, self.hidden_size)
         
-        fc0 = nn.Sequential(Linear(self.hidden_size, self.readout_size), self.fn, self.dropout)
+        if config['water_interaction']:
+            self.embWater = torch.load('/beegfs/dz1061/gcn/chemGraph/data/WATER/graphs/water.pt')['x']
+            self.f_water = Linear(config['num_features'], config['dimension'])
+            if config['dataset'] in ['ccdc_logp', 'logp', 'ccdc_sollogp']:
+                self.embOct = torch.load('/beegfs/dz1061/gcn/chemGraph/data/OCTANOL/graphs/octanol.pt')['x']
+                self.f_Oct = Linear(config['num_features'], config['dimension'])
+
+        if config['water_interaction']:
+            fc0 = nn.Sequential(Linear(self.hidden_size*2, self.readout_size), self.fn, self.dropout)
+        else:
+            fc0 = nn.Sequential(Linear(self.hidden_size, self.readout_size), self.fn, self.dropout)
+        
         self.out.append(fc0) 
         for i in range(config['NumOutLayers']-2):
             fc = nn.Sequential(Linear(self.readout_size, self.readout_size), self.fn, self.dropout)
@@ -746,6 +791,27 @@ class wlkernel(torch.nn.Module):
             del nei_label
             f_atoms = F.relu(self.fc_new_lei(new_label))
             del new_label 
+        
+        if self.config['water_interaction']:
+            hidden_water = self.fn(self.f_water(self.embWater.cuda()))
+            interaction = torch.tanh(torch.mm(atom_hiddens, hidden_water.transpose(0, 1)))
+            solute_after_interaction = torch.mm(interaction, hidden_water)
+            if self.config['dataset'] in ['ccdc_sollogp', 'ccdc_logp', 'logp']:
+               hidden_oct = self.fn(self.f_Oct(self.embOct.cuda()))
+               interaction = torch.tanh(torch.mm(atom_hiddens, hidden_oct.transpose(0, 1)))
+               solute_after_oct = torch.mm(interaction, hidden_oct)
+            if self.config['InterByConcat']:
+               atom_hiddens = torch.cat([atom_hiddens, solute_after_interaction], 1) # dimension increase to 2 fold
+               if self.config['dataset'] in ['ccdc_logp', 'logp']:
+                   atom_hiddens = torch.cat([solute_after_oct, solute_after_interaction], 1) # dimension increase to 2 fold
+               if self.config['dataset'] == 'ccdc_sollogp':
+                   atom_hiddens = torch.cat([solute_after_oct, solute_after_interaction], 1)
+            if self.config['InterBySub']:
+               atom_hiddens = atom_hiddens - solute_after_interaction
+               if self.config['dataset'] == ['ccdc_logp', 'logp']:
+                  atom_hiddens = solute_after_oct - solute_after_interaction
+               if self.config['dataset'] == 'ccdc_sollogp':
+                  atom_hiddens = solute_after_oct - solute_after_interaction
         
         mol_vecs = []
         for i, (a_start, a_size) in enumerate(a_scope):
@@ -1550,13 +1616,12 @@ class wlkernel_swag(Base2):
     pass
 
 
-########### VAE #####################################################################################
-class VAE(nn.Module):
+class TransUnsuper(nn.Module):
     def __init__(self, config):
         '''
         https://pytorch.org/docs/master/_modules/torch/nn/modules/transformer.html#TransformerEncoder
         '''
-        super(VAE, self).__init__()
+        super(TransUnsuper, self).__init__()
         self.config = config
         self.src_embedding = nn.Embedding(self.config['vocab_size'], self.config['dimension'])
         self.trg_embedding = nn.Embedding(self.config['vocab_size'], self.config['dimension'])
@@ -1567,16 +1632,9 @@ class VAE(nn.Module):
         self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=self.config['numEncoders'])
         decoder_layer = nn.TransformerDecoderLayer(self.config['dimension'], self.config['numDecoLayers'])
         self.decoder = nn.TransformerDecoder(decoder_layer, num_layers=self.config['numDecoders'])
-        self.norm_layer = LayerNorm(self.config['varDimen'])
         
-        self.fc00 = nn.Linear(self.config['dimension'], self.config['dimension'])
-        self.fc01 =  nn.Linear(self.config['dimension'], self.config['dimension'])
-        self.fc0 = nn.Linear(self.config['dimension'], self.config['varDimen'])
-        self.fc1 = nn.Linear(self.config['dimension'], self.config['varDimen'])
-        #self.decode_latent = nn.Linear(self.config['varDimen'], self.config['dimension'])
-        self.fc11 = nn.Linear(self.config['varDimen'], self.config['dimension'])
+        self.fc1 = nn.Linear(self.config['dimension'], self.config['dimension'])
         self.fc2 = nn.Linear(self.config['dimension'], self.config['vocab_size'])
-        self.fc3 = nn.Linear(self.config['dimension'], self.config['dimension'])
         
 
     def _generate_square_subsequent_mask(self, sz):
@@ -1585,44 +1643,24 @@ class VAE(nn.Module):
         mask = mask.float().masked_fill(mask == 0, float('-inf')).masked_fill(mask == 1, float(0.0))
         return mask
 
-    def reparameterize(self, mu, logvar):
-        if self.training:
-            # multiply log variance with 0.5, then in-place exponent
-            # yielding the standard deviation
-            std = logvar.mul(0.5).exp_()  # type: Variable
-            eps = Variable(std.data.new(std.size()).normal_())
-            sample_z = eps.mul(std).add_(mu)
-
-            return sample_z
-        else:
-            return mu
-    
     def encode(self, x):
-        srcEmbed = self.src_embedding(x.SRC)
-        bs = srcEmbed.shape[0]
+        srcEmbed = self.src_embedding(x.SRC.to('cuda'))
+        #bs = srcEmbed.shape[0] # batch size
         encEmbed = self.pe(srcEmbed)
-        self.src_key_mask = (x.SRC == 1).to('cuda')
+        self.src_key_mask = (x.SRC == 1).to('cuda') # padding mask
         seq_size = x.SRC.size()[1]
-        self.src_atten_mask = self._generate_square_subsequent_mask(seq_size).to('cuda')
+        self.src_atten_mask = self._generate_square_subsequent_mask(seq_size).to('cuda')  # attention mask
         output_encoder = self.encoder(src=encEmbed.transpose(0,1), \
                                       mask=self.src_atten_mask, \
                               src_key_padding_mask=self.src_key_mask)
-        #seq_repr = output_encoder.transpose(0,1).mean(dim=1).view(bs, -1)
-        #mu, logvar = F.relu(self.fc00(seq_repr)), \
-        #             F.relu(self.fc01(seq_repr))
-        mu, logvar = F.relu(self.fc00(output_encoder.transpose(0,1))), \
-                     F.relu(self.fc01(output_encoder.transpose(0,1)))
-        mu, logvar = self.fc0(mu), self.fc1(logvar)
  
-        return mu, logvar
+        return output_encoder
     
     def decode(self, x, z):
         bs = x.TRG.shape[0]
-        x.TRG = x.TRG.view(-1,)[x.TRG.view(-1,) != 3].view(bs, -1) # to achieve x.trg[:, :-1], slice off EOS
-        seq_size = x.TRG.size()[1]
-        #z = z.repeat(1, seq_size, 1)
-        normEmd = self.norm_layer(z)
-        toDecoderEmbed = F.relu(self.fc11(normEmd))
+        x.TRG = x.TRG.view(-1,)[x.TRG.view(-1,) != 3].view(bs, -1).to('cuda') # to achieve x.trg[:, :-1], slice off EOS
+        seq_size = x.TRG.size()[1]   
+        toDecoderEmbed = z
         trgEmbed = self.trg_embedding(x.TRG)
         decEmbed = self.pe(trgEmbed)
         self.tgt_key_mask = (x.TRG == 1).to('cuda')
@@ -1633,32 +1671,26 @@ class VAE(nn.Module):
                              #memory_mask=self.src_atten_mask, \
                              tgt_key_padding_mask = self.tgt_key_mask, \
                              memory_key_padding_mask=self.src_key_mask)
-                             #)                     
+                            # )
+                                                 
         return output_decoder
     
-    def get_z(self, x):
-        mu, logvar = self.encode(x)
-        return self.reparameterize(mu, logvar)
-
     def forward(self, data):
-        mu, logvar = self.encode(data)
-        bs = mu.shape[0]
-        sample_z = self.reparameterize(mu, logvar).to('cuda')
-        #encoder_state = self.decode_latent(sample_z).view(bs, 1, -1)
-        output_decoder = self.decode(data, sample_z)
+        encoder_state = self.encode(data)
+        output_decoder = self.decode(data, encoder_state)
         
         
-        output = F.relu(self.fc3(output_decoder.transpose(0,1)))
+        output = F.relu(self.fc1(output_decoder.transpose(0,1)))
         output = self.fc2(output)
 
-        return output, mu, logvar
+        return output
 
-class VAE_rev(nn.Module):
+class VAE(nn.Module):
     def __init__(self, config):
         '''
         https://pytorch.org/docs/master/_modules/torch/nn/modules/transformer.html#TransformerEncoder
         '''
-        super(VAE_rev, self).__init__()
+        super(VAE, self).__init__()
         self.config = config
         self.src_embedding = nn.Embedding(self.config['vocab_size'], self.config['dimension'])
         self.trg_embedding = nn.Embedding(self.config['vocab_size'], self.config['dimension'])
