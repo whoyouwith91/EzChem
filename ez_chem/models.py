@@ -1,8 +1,6 @@
 import torch
 from torch import nn
 from torch_scatter import scatter_mean
-from torch_geometric.nn import MessagePassing
-from torch_geometric.nn import NNConv, GATConv, GraphConv
 from torch_geometric.utils import add_self_loops, degree, softmax
 from torch_geometric.nn import global_add_pool, global_mean_pool, global_max_pool, GlobalAttention, Set2Set
 import torch.nn.functional as F
@@ -10,6 +8,7 @@ from torch_scatter import scatter_add
 from torch_geometric.nn.inits import glorot, zeros
 from k_gnn import avg_pool, add_pool, max_pool
 from helper import *
+from layers import *
 
 num_atom_features = 40 #including the extra mask tokens
 
