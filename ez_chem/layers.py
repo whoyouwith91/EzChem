@@ -4,128 +4,243 @@ import torch.nn as nn
 from torch.nn import GRU, LSTM
 import torch.nn.functional as F
 from torch.nn import Sequential, Linear, ReLU, LeakyReLU, ELU, Tanh
+from torch_scatter import scatter_mean
+from torch_geometric.nn import MessagePassing
+from torch_geometric.nn import NNConv, GATConv, GraphConv
+from torch_geometric.utils import add_self_loops, degree, softmax
+from torch_geometric.nn import global_add_pool, global_mean_pool, global_max_pool, GlobalAttention, Set2Set
+import torch.nn.functional as F
+from torch_scatter import scatter_add
+from torch_geometric.nn.inits import glorot, zeros
+from k_gnn import avg_pool, add_pool, max_pool
+from helper import *
 
-class GraphAttentionLayer(torch.nn.Module):
+
+class GINConv(MessagePassing):
     """
-    Simple GAT layer, similar to https://arxiv.org/abs/1710.10903
-    """
-
-    def __init__(self, in_features, out_features, dropout, alpha, concat=True):
-        super(GraphAttentionLayer, self).__init__()
-        self.dropout = dropout
-        self.in_features = in_features
-        self.out_features = out_features
-        self.alpha = alpha
-        self.concat = concat
-
-        self.W = nn.Parameter(torch.zeros(size=(in_features, out_features)))
-        nn.init.xavier_uniform_(self.W.data, gain=1.414)
-        self.a = nn.Parameter(torch.zeros(size=(2*out_features, 1)))
-        self.a_2 = nn.Parameter(torch.zeros(size=(3*out_features, 1)))
-        nn.init.xavier_uniform_(self.a.data, gain=1.414)
-
-        self.leakyrelu = nn.LeakyReLU(self.alpha)
-
-    def forward(self, input_, adj, input_2=None):
-        h = torch.mm(input_, self.W)
-        N = h.size()[0]
-        
-        if input_2 is None:
-            a_input = torch.cat([h.repeat(1, N).view(N * N, -1), h.repeat(N, 1)], dim=1).view(N, -1, 2 * self.out_features)
-            e = self.leakyrelu(torch.matmul(a_input, self.a).squeeze(2))
-        else:
-            a_input = torch.cat([h.repeat(1, N).view(N * N, -1), h.repeat(N, 1), input_2.repeat(N * N, 1)], dim=1).view(N, -1, 3 * self.out_features)
-            e = self.leakyrelu(torch.matmul(a_input, self.a_2).squeeze(2))
-        zero_vec = -9e15*torch.ones_like(e)
-        attention = torch.where(adj > 0, e, zero_vec)
-        attention = F.softmax(attention, dim=1)
-        attention = F.dropout(attention, self.dropout, training=True)
-        h_prime = torch.matmul(attention, h)
-
-        if self.concat:
-            return F.relu(h_prime)
-        else:
-            return h_prime
-
-    def __repr__(self):
-        return self.__class__.__name__ + ' (' + str(self.in_features) + ' -> ' + str(self.out_features) + ')'
-
-class GAT(torch.nn.Module):
-    def __init__(self, nfeat, nhid, dropout, alpha, nheads):
-        """Dense version of GAT."""
-        super(GAT, self).__init__()
-        self.dropout = dropout
-        self.nheads = nheads
-        self.attentions = [GraphAttentionLayer(nfeat, nhid, dropout=dropout, alpha=alpha, concat=True) for _ in range(nheads)]
-        for i, attention in enumerate(self.attentions):
-            self.add_module('attention_{}'.format(i), attention)
-
-        #self.out_att = GraphAttentionLayer(nhid * nheads, nclass, dropout=dropout, alpha=alpha, concat=False)
-
-    def forward(self, x, adj, water=None):
-        x = F.dropout(x, self.dropout, training=True)
-        #x = torch.cat([att(x, adj) for att in self.attentions], dim=1)
-        x = torch.stack([att(x, adj, water) for att in self.attentions]).sum(dim=0) / self.nheads
-        x = F.dropout(x, self.dropout, training=True)
-        x = F.relu(x)
-        return x   # last dimension is nheads*out_features
-
-
-def softmax(src, index, num_nodes=None):
-    r"""Computes a sparsely evaluated softmax.
-    Given a value tensor :attr:`src`, this function first groups the values
-    along the first dimension based on the indices specified in :attr:`index`,
-    and then proceeds to compute the softmax individually for each group.
-
+    Extension of GIN aggregation to incorporate edge information by concatenation.
     Args:
-        src (Tensor): The source tensor.
-        index (LongTensor): The indices of elements for applying the softmax.
-        num_nodes (int, optional): The number of nodes, *i.e.*
-            :obj:`max_val + 1` of :attr:`index`. (default: :obj:`None`)
-
-    :rtype: :class:`Tensor`
-    """
-
-    #num_nodes = maybe_num_nodes(index, num_nodes)
-    #print('here1')
-    out = src - scatter_max(src, index, dim=0, dim_size=num_nodes)[0][index]
-    #print('here2')
-    out = out.exp()
-    out = out / (
-        scatter_add(out, index, dim=0, dim_size=num_nodes)[index] + 1e-16)
-
-    return out
-
-class set2set(torch.nn.Module):
-    def __init__(self, input_dim, steps):
-        super(set2set, self).__init__()
-        self.input_dim = input_dim
-        self.steps = steps
-        self.lstm = torch.nn.LSTM(2*input_dim, input_dim)
-
-    def layer(self, tensor, num_of_features, num_of_steps):
-        ##### input format ########   timesteps X no_of_atoms X lengthof feature vector
+        emb_dim (int): dimensionality of embeddings for nodes and edges.
+        embed_input (bool): whether to embed input or not. 
         
-        n = tensor.shape[0]
-        tensor = tensor.transpose(0,1)
-        q_star = torch.zeros(n, 2*num_of_features).to('cuda')
-        hidden = (torch.zeros(1, n, num_of_features).to('cuda'),
-              torch.zeros(1, n, num_of_features).to('cuda'))
-        for i in range(num_of_steps):
-            q,hidden = self.lstm(q_star.unsqueeze(0), hidden)
-            e = torch.sum(tensor*q,2)
-            a = F.softmax(e,dim=0)
-            r = a.unsqueeze(2)*tensor
-            r=  torch.sum(r,0)
-            q_star = torch.cat([q.squeeze(0),r],1)
-        return q_star
+    See https://arxiv.org/abs/1810.00826
+    """
+    def __init__(self, emb_dim, aggr = "add"):
+        super(GINConv, self).__init__()
+        #multi-layer perceptron
+        self.mlp = torch.nn.Sequential(torch.nn.Linear(emb_dim, 2*emb_dim), torch.nn.ReLU(), torch.nn.Linear(2*emb_dim, emb_dim))
+        self.edge_embedding1 = torch.nn.Embedding(num_bond_type, emb_dim)
+        self.edge_embedding2 = torch.nn.Embedding(num_bond_direction, emb_dim)
 
-    def forward(self, x, batch, dim=0):
-        batch_size = batch.max().item() + 1
-        stacks = [x[batch == i].unsqueeze(dim) for i in range(batch_size)]
+        torch.nn.init.xavier_uniform_(self.edge_embedding1.weight.data)
+        torch.nn.init.xavier_uniform_(self.edge_embedding2.weight.data)
+        self.aggr = aggr
 
-        return torch.stack([self.layer(i, self.input_dim, self.steps) for i in stacks]).squeeze(1)
+    def forward(self, x, edge_index, edge_attr):
+        #add self loops in the edge space
+        edge_index = add_self_loops(edge_index, num_nodes = x.size(0))
+        #add features corresponding to self-loop edges.
+        self_loop_attr = torch.zeros(x.size(0), 2)
+        self_loop_attr[:,0] = 4 #bond type for self-loop edge
+        self_loop_attr = self_loop_attr.to(edge_attr.device).to(edge_attr.dtype)
+        edge_attr = torch.cat((edge_attr, self_loop_attr), dim = 0)
 
+        edge_embeddings = self.edge_embedding1(edge_attr[:,0]) + self.edge_embedding2(edge_attr[:,1])
+
+        return self.propagate(edge_index[0], x=x, edge_attr=edge_embeddings)
+
+    def message(self, x_j, edge_attr):
+        return x_j + edge_attr
+
+    def update(self, aggr_out):
+        return self.mlp(aggr_out)
+
+
+class GCNConv(MessagePassing):
+
+    def __init__(self, emb_dim, aggr = "add"):
+        super(GCNConv, self).__init__()
+
+        self.emb_dim = emb_dim
+        self.edge_embedding1 = torch.nn.Embedding(num_bond_type, emb_dim)
+        self.edge_embedding2 = torch.nn.Embedding(num_bond_direction, emb_dim)
+
+        torch.nn.init.xavier_uniform_(self.edge_embedding1.weight.data)
+        torch.nn.init.xavier_uniform_(self.edge_embedding2.weight.data)
+
+        self.aggr = aggr
+
+    def norm(self, edge_index, num_nodes, dtype):
+        ### assuming that self-loops have been already added in edge_index
+        edge_weight = torch.ones((edge_index.size(1), ), dtype=dtype,
+                                     device=edge_index.device)
+        row, col = edge_index
+        deg = scatter_add(edge_weight, row, dim=0, dim_size=num_nodes)
+        deg_inv_sqrt = deg.pow(-0.5)
+        deg_inv_sqrt[deg_inv_sqrt == float('inf')] = 0
+
+        return deg_inv_sqrt[row] * edge_weight * deg_inv_sqrt[col]
+
+
+    def forward(self, x, edge_index, edge_attr):
+        edge_index = add_self_loops(edge_index, num_nodes = x.size(0))
+
+        #add features corresponding to self-loop edges.
+        self_loop_attr = torch.zeros(x.size(0), 2)
+        self_loop_attr[:,0] = 4 #bond type for self-loop edge
+        self_loop_attr = self_loop_attr.to(edge_attr.device).to(edge_attr.dtype)
+        edge_attr = torch.cat((edge_attr, self_loop_attr), dim = 0)
+
+        edge_embeddings = self.edge_embedding1(edge_attr[:,0]) + self.edge_embedding2(edge_attr[:,1])
+
+        norm = self.norm(edge_index[0], x.size(0), x.dtype)
+        return self.propagate(edge_index[0], x=x, edge_attr=edge_embeddings, norm = norm)
+
+    def message(self, x_j, edge_attr, norm):
+        return norm.view(-1, 1) * (x_j + edge_attr)
+
+class GATCon(MessagePassing):
+    def __init__(self, emb_dim, heads=2, negative_slope=0.2, aggr = "add"):
+        super(GATCon, self).__init__()
+
+        self.aggr = aggr
+
+        self.emb_dim = emb_dim
+        self.heads = heads
+        #self.negative_slope = negative_slope
+
+        self.gat = GATConv(in_channels=self.emb_dim, out_channels=self.emb_dim, heads=self.heads, concat=False)
+
+    def forward(self, x, edge_index, edge_attr):
+
+        #add self loops in the edge space
+        edge_index = add_self_loops(edge_index, num_nodes = x.size(0))
+
+        return self.gat(x=x, edge_index=edge_index[0])
+
+class GATConv_old(MessagePassing):
+    def __init__(self, emb_dim, heads=2, negative_slope=0.2, aggr = "add"):
+        super(GATConv_old, self).__init__()
+
+        self.aggr = aggr
+
+        self.emb_dim = emb_dim
+        self.heads = heads
+        self.negative_slope = negative_slope
+
+        self.weight_linear = torch.nn.Linear(emb_dim, heads * emb_dim)
+        self.att = torch.nn.Parameter(torch.Tensor(1, heads, 2 * emb_dim))
+
+        self.bias = torch.nn.Parameter(torch.Tensor(emb_dim))
+
+        self.edge_embedding1 = torch.nn.Embedding(num_bond_type, heads * emb_dim)
+        self.edge_embedding2 = torch.nn.Embedding(num_bond_direction, heads * emb_dim)
+
+        torch.nn.init.xavier_uniform_(self.edge_embedding1.weight.data)
+        torch.nn.init.xavier_uniform_(self.edge_embedding2.weight.data)
+
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        glorot(self.att)
+        zeros(self.bias)
+
+    def forward(self, x, edge_index, edge_attr):
+
+        #add self loops in the edge space
+        edge_index = add_self_loops(edge_index, num_nodes = x.size(0))
+
+        #add features corresponding to self-loop edges.
+        self_loop_attr = torch.zeros(x.size(0), 2)
+        self_loop_attr[:,0] = 4 #bond type for self-loop edge
+        self_loop_attr = self_loop_attr.to(edge_attr.device).to(edge_attr.dtype)
+        edge_attr = torch.cat((edge_attr, self_loop_attr), dim = 0)
+
+        edge_embeddings = self.edge_embedding1(edge_attr[:,0]) + self.edge_embedding2(edge_attr[:,1])
+
+        x = self.weight_linear(x).view(-1, self.heads, self.emb_dim)
+        #print(x.shape)
+        #print(edge_embeddings.shape)
+        return self.propagate(edge_index[0], x=x, edge_attr=edge_embeddings)
+
+    def message(self, edge_index, x_i, x_j, edge_attr):
+        edge_attr = edge_attr.view(-1, self.heads, self.emb_dim)
+        #print(edge_attr.shape, x_i.shape, x_j.shape)
+        x_j += edge_attr
+
+        alpha = (torch.cat([x_i, x_j], dim=-1) * self.att).sum(dim=-1)
+
+        alpha = F.leaky_relu(alpha, self.negative_slope)
+        alpha = softmax(alpha, edge_index[0])
+
+        return x_j * alpha.view(-1, self.heads, 1)
+
+    def update(self, aggr_out):
+        aggr_out = aggr_out.mean(dim=1)
+        aggr_out = aggr_out + self.bias
+
+        return aggr_out
+
+
+class GraphSAGEConv(MessagePassing):
+    def __init__(self, emb_dim, aggr = "mean"):
+        super(GraphSAGEConv, self).__init__()
+
+        self.emb_dim = emb_dim
+        self.edge_embedding1 = torch.nn.Embedding(num_bond_type, emb_dim)
+        self.edge_embedding2 = torch.nn.Embedding(num_bond_direction, emb_dim)
+
+        torch.nn.init.xavier_uniform_(self.edge_embedding1.weight.data)
+        torch.nn.init.xavier_uniform_(self.edge_embedding2.weight.data)
+
+        self.aggr = aggr
+
+    def forward(self, x, edge_index, edge_attr):
+        #add self loops in the edge space
+        edge_index = add_self_loops(edge_index, num_nodes = x.size(0))
+
+        #add features corresponding to self-loop edges.
+        self_loop_attr = torch.zeros(x.size(0), 2)
+        self_loop_attr[:,0] = 4 #bond type for self-loop edge
+        self_loop_attr = self_loop_attr.to(edge_attr.device).to(edge_attr.dtype)
+        edge_attr = torch.cat((edge_attr, self_loop_attr), dim = 0)
+
+        edge_embeddings = self.edge_embedding1(edge_attr[:,0]) + self.edge_embedding2(edge_attr[:,1])
+
+        return self.propagate(edge_index[0], x=x, edge_attr=edge_embeddings)
+
+    def message(self, x_j, edge_attr):
+        return x_j + edge_attr
+
+    def update(self, aggr_out):
+        return F.normalize(aggr_out, p = 2, dim = -1)
+
+class NNCon(torch.nn.Module):
+    def __init__(self, emb_dim):
+        super(NNCon, self).__init__()
+        self.emb_dim = emb_dim
+        self.edge_embedding1 = torch.nn.Embedding(num_bond_type, emb_dim)
+        self.edge_embedding2 = torch.nn.Embedding(num_bond_direction, emb_dim)
+
+        torch.nn.init.xavier_uniform_(self.edge_embedding1.weight.data)
+        torch.nn.init.xavier_uniform_(self.edge_embedding2.weight.data)
+
+        M_in, B_in, M_out = emb_dim, emb_dim, emb_dim 
+        ll = Sequential(Linear(B_in, 128), nn.ReLU(), Linear(128, M_in * M_out))
+        self.conv_ = NNConv(M_in, M_out, ll)
+
+    def forward(self, x, edge_index, edge_attr):
+        edge_index = add_self_loops(edge_index, num_nodes = x.size(0))
+
+        #add features corresponding to self-loop edges.
+        self_loop_attr = torch.zeros(x.size(0), 2)
+        self_loop_attr[:,0] = 4 #bond type for self-loop edge
+        self_loop_attr = self_loop_attr.to(edge_attr.device).to(edge_attr.dtype)
+        edge_attr = torch.cat((edge_attr, self_loop_attr), dim = 0)
+
+        edge_embeddings = self.edge_embedding1(edge_attr[:,0]) + self.edge_embedding2(edge_attr[:,1])
+        
+        return self.conv_(x, edge_index[0], edge_embeddings)
 
 class NNDropout(nn.Module):
     def __init__(self, level, weight_regularizer=1e-6,
