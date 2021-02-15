@@ -37,7 +37,6 @@ def main():
     parser.add_argument('--NumOutLayers', type=int, default=3) # number of readout layers
     parser.add_argument('--dataset', type=str, default = 'zinc_standard_agent', help='root directory of dataset for pretraining')
     parser.add_argument('--normalize', action='store_true')  # on target data
-    parser.add_argument('--drop_ratio', type=float, default=0.0) 
     parser.add_argument('--output_model_file', type=str, default = '', help='filename to output the model')
     parser.add_argument('--seed', type=int, default=0, help = "Seed for splitting dataset.")
     parser.add_argument('--num_workers', type=int, default = 8, help='number of workers for dataset loading')
@@ -50,7 +49,7 @@ def main():
     parser.add_argument('--JK', type=str, default="last",
                         help='how the node features are combined across layers. last, sum, max or concat')
     parser.add_argument('--train_type', type=str, default='from_scratch', choices=['from_scratch', 'transfer', 'hpsearch', 'finetuning'])
-    parser.add_argument('--loss', type=str, choices=['l1', 'l2', 'smooth_l1', 'dropout', 'vae', 'unsuper', 'maskedL2'])
+    parser.add_argument('--loss', type=str, choices=['l1', 'l2', 'smooth_l1', 'dropout', 'vae', 'unsuper'])
     parser.add_argument('--metrics', type=str, choices=['l1', 'l2'])
     parser.add_argument('--weights', type=str, choices=['he_norm', 'xavier_norm', 'he_uni', 'xavier_uni'], default='he_uni')
     parser.add_argument('--lr_style', type=str, choices=['constant', 'decay']) # now is exponential decay on valid loss
@@ -59,7 +58,6 @@ def main():
     parser.add_argument('--early_stopping', action='store_true')
     parser.add_argument('--experiment', type=str)  # when doing experimenting, name it. 
     parser.add_argument('--num_tasks', type=int, default=1)
-    parser.add_argument('--propertyLevel', type=str, default='molecule')
     
     parser.add_argument('--uncertainty',  type=str)
     parser.add_argument('--uncertainty_method',  type=str)
@@ -83,10 +81,7 @@ def main():
     if args.style == 'preTraining':
         this_dic['data_path'] = os.path.join(args.allDataPath, args.dataset, 'graphs/base', 'COMPLETE', args.model)
     if args.solvent:
-        if args.style == 'preTraining':
-            this_dic['data_path'] = os.path.join(args.allDataPath, args.dataset, 'graphs/base', 'COMPLETE', args.model, args.solvent)
-        else:
-            this_dic['data_path'] = os.path.join(args.allDataPath, args.dataset, 'graphs/base', args.model, args.solvent)
+        this_dic['data_path'] = os.path.join(args.allDataPath, args.dataset, 'graphs/base', args.model, args.solvent)
         assert this_dic['interaction']
     
     if not os.path.exists(os.path.join(args.running_path, 'trained_model/')):
@@ -135,13 +130,22 @@ def main():
             best_config = json.load(f)
         this_dic.update(best_config)
 
-    if args.EFGS:
+    genModel = get_model(this_dic)
+    if args.model == '1-GNN':
+        model = genModel(args.num_layer, args.emb_dim, args.NumOutLayers, args.num_tasks, graph_pooling=args.pooling, gnn_type=args.gnn_type)
+    if args.model == '1-2-GNN':
+        model = genModel(args.num_layer, args.emb_dim, args.NumOutLayers, args.num_tasks, num_i_2, graph_pooling=args.pooling, gnn_type=args.gnn_type)
+    if args.model in ['1-efgs-GNN','1-2-efgs-GNN']:
         this_dic['efgs_lenth'] = len(vocab)
-    if args.interaction and args.dataset in ['ws', 'mp', 'deepchem/delaney']:
-        this_dic['soluteSelf'] = True
-    else:
-        this_dic['soluteSelf'] = False
-    model = get_model(this_dic)
+        model = genModel(args.num_layer, args.emb_dim, args.NumOutLayers, args.num_tasks, num_i_2, len(vocab), graph_pooling=args.pooling, gnn_type=args.gnn_type)
+    if args.model in ['1-interaction-GNN']: # there are corresponding 1-interaction-GNN models for each property
+        if args.dataset in ['ws', 'mp', 'deepchem/delaney']:
+            model = genModel(args.num_layer, args.emb_dim, args.NumOutLayers, args.num_tasks, args.solvent, args.interaction, soluteSelf=True, graph_pooling=args.pooling, gnn_type=args.gnn_type)
+        else:
+            model = genModel(args.num_layer, args.emb_dim, args.NumOutLayers, args.num_tasks, args.solvent, args.interaction, soluteSelf=False, graph_pooling=args.pooling, gnn_type=args.gnn_type)
+    if args.model in ['1-interaction-GNN-naive']: # simpler 1-interaction-GNN
+        if args.dataset in ['ws', 'sol_exp', 'logp', 'deepchem/freesol', 'deepchem/delaney', 'deepchem/logp']:
+            model = genModel(args.dataset, args.num_layer, args.emb_dim, args.NumOutLayers, args.num_tasks, args.solvent, args.interaction, soluteSelf=False, graph_pooling=args.pooling, gnn_type=args.gnn_type)
 
     if this_dic['train_type'] == 'from_scratch':
         model = init_weights(model, this_dic)
@@ -157,6 +161,7 @@ def main():
     if this_dic['train_type'] == 'transfer': # freeze encoder layers
         for params in model.gnn.parameters():
             params.requires_grad = False
+
 
     this_dic['NumParas'] = count_parameters(model)
     model_ = model.to(device)

@@ -15,6 +15,8 @@ from torch_geometric.nn.inits import glorot, zeros
 from k_gnn import avg_pool, add_pool, max_pool
 from helper import *
 
+num_bond_type = 6 #including aromatic and self-loop edge, and extra masked tokens
+num_bond_direction = 4 
 
 class GINConv(MessagePassing):
     """

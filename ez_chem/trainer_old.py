@@ -78,6 +78,7 @@ def train(model, optimizer, dataloader, config):
     Define loss and backpropagation
     '''
     model.train()
+    loss_all = 0
     y = []
     means = []
 
@@ -92,18 +93,14 @@ def train(model, optimizer, dataloader, config):
             
         optimizer.zero_grad()
         y0, _ = model(data)
-        if config['taskType'] == 'single' and config['propertyLevel'] == 'molecule':
+        if config['taskType'] == 'single':
             loss = get_loss_fn(config['loss'])(y0, data.y)
+        
         if config['taskType'] == 'multi' and config['dataset'] == 'calcSolLogP':
             loss = get_loss_fn(config['loss'])(y0[:,0], data.y) + get_loss_fn(config['loss'])(y0[:,1], data.y1) + get_loss_fn(config['loss'])(y0[:,2], data.y2)
         if config['dataset'] == 'commonProperties':
             loss = get_loss_fn(config['loss'])(y0[:,0], data.y) + get_loss_fn(config['loss'])(y0[:,1], data.y1) + get_loss_fn(config['loss'])(y0[:,2], data.y2) + get_loss_fn(config['loss'])(y0[:,3], data.y3)
-        if config['propertyLevel'] == 'atom':
-            #print(y0[data.mask>0])
-            loss = get_loss_fn(config['loss'])(data.y, y0, data.mask)
-            #print(loss)
-            #sys.stdout.flush()
-
+        
         loss.backward()
         if config['optimizer'] in ['sgd']:
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.)
@@ -122,8 +119,9 @@ def test(model, dataloader, config):
     '''
     model.eval()
     error = 0
-    if config['propertyLevel'] == 'atom':
-        total_N = 0
+    if config['taskType'] == 'multi':
+       error1 = 0
+       error2 = 0
     with torch.no_grad():
        for data in dataloader:
             if config['gnn_type'] not in ['loopybp', 'wlkernel', 'loopybp_dropout', 'wlkernel_dropout', 'loopybp_swag', 'wlkernel_swag']:
@@ -139,7 +137,7 @@ def test(model, dataloader, config):
                 error_name = 'l1'
                 error += get_metrics_fn(error_name)(model(data)[0], data.y).item() * data.num_graphs
             else:
-                if config['taskType'] == 'single' and config['propertyLevel'] == 'molecule':
+                if config['taskType'] == 'single':
                     error += get_metrics_fn(config['metrics'])(model(data)[0], data.y) * data.num_graphs
                 if config['taskType'] == 'multi' and config['dataset'] == 'calcSolLogP':
                     y0, _ = model(data)
@@ -147,20 +145,9 @@ def test(model, dataloader, config):
                 if config['taskType'] == 'multi' and config['dataset'] == 'commonProperties':
                     y0, _ = model(data)
                     error += (get_loss_fn(config['loss'])(y0[:,0], data.y) + get_loss_fn(config['loss'])(y0[:,1], data.y1) + get_loss_fn(config['loss'])(y0[:,2], data.y2) + get_loss_fn(config['loss'])(y0[:,3], data.y3))*data.num_graphs
-                if config['propertyLevel'] == 'atom':
-                    #print(data.mask)
-                    #sys.stdout.flush()
-                    #print(data.y)
-                    #sys.stdout.flush()
-                    total_N += data.mask.sum().item()
-                    error += get_metrics_fn(config['metrics'])(model(data)[0][data.mask>0].reshape(-1,1), data.y[data.mask>0].reshape(-1,1))*data.mask.sum().item()
-                    #error += MAE_loss(model(data)[0], data.y, data.mask)
+                     
        if config['dataset'] in ['qm9']:
            return error / len(dataloader.dataset) # MAE
-       elif config['propertyLevel'] == 'atom' and config['dataset'] in ['nmr/hydrogen', 'nmr/carbon']:
-           #print(error.item(), total_N.item())
-           #sys.stdout.flush()
-           return error.item() / total_N # MAE
        else:
            if config['taskType'] == 'single':
               return math.sqrt(error / len(dataloader.dataset)) # RMSE for ws, logp, mp, etc.

@@ -166,6 +166,8 @@ class MolGraph:
         # Convert SMILES to RDKit molecule if necessary
         if type(mol) == str:
             mol = Chem.MolFromSmiles(mol)
+        if type(mol) == Chem.rdchem.Mol:
+            mol = mol
 
         self.n_atoms = 0  # number of atoms
         self.n_bonds = 0  # number of bonds

@@ -1,4 +1,4 @@
-import os, random, math, json, glob
+import os, sys, random, math, json, glob
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -72,11 +72,21 @@ def kl_anneal_function(anneal_function, step, k1=0.1, k2=0.2, max_value=1.0, x0=
         mi = k1
         return min(ma, ma * cnt + mi + 2 * step * (ma - mi) / x0)
 
+def MaskedMSELoss(y, x, mask):
+    """
+    Masked mean squared error
+    """
+    x_masked = x[mask>0].reshape(-1, 1)
+    y_masked = y[mask>0].reshape(-1, 1)
+    return F.mse_loss(x_masked, y_masked)
+
 def get_loss_fn(name):
     if name == 'l1':
         return F.l1_loss
     if name == 'l2':
         return F.mse_loss
+    if name == 'maskedL2':
+        return MaskedMSELoss
     if name == 'smooth_l1':
         return F.smooth_l1_loss
     if name == 'dropout':
@@ -280,13 +290,13 @@ def saveToResultsFile(this_dic, contents, name='data.txt'):
         with open(os.path.join(this_dic['running_path'], 'data.txt'), 'a') as f1:
             f1.write(str(contents[1]) + '\t' + str(round(contents[2]-contents[3], 2)) + '\t' + str(round(contents[4], 7)) + '\t' + str(round(contents[5], 7)) + '\t' + str(round(contents[6], 7)) + '\t' + str(contents[7]) + '\t' + str(contents[8]) + '\n')
 
-    if this_dic['model'] in ['1-GNN', '1-2-GNN', '1-efgs-GNN', '1-2-efgs-GNN', '1-interaction-GNN', 'Roberta']: # 1-2-GNN, loopybp, wlkernel
+    if this_dic['model'] in ['1-GNN', '1-2-GNN', '1-efgs-GNN', '1-2-efgs-GNN', '1-interaction-GNN', '1-interaction-GNN-naive', 'Roberta']: # 1-2-GNN, loopybp, wlkernel
         assert len(contents) == 9
         with open(os.path.join(this_dic['running_path'], 'data.txt'), 'a') as f1:
             f1.write(str(contents[1]) + '\t' + str(round(contents[2]-contents[3], 2)) + '\t' + str(round(contents[4], 7)) + '\t' + str(round(contents[5], 7)) + '\t' + str(round(contents[6], 7)) + '\t' + str(contents[7]) + '\t' + str(contents[8]) + '\n')
 
 def saveConfig(this_dic, name='config.json'):
-    if this_dic['model'] in ['1-GNN', '1-2-GNN', '1-efgs-GNN', '1-2-efgs-GNN', '1-interaction-GNN']:
+    if this_dic['model'] in ['1-GNN', '1-2-GNN', '1-efgs-GNN', '1-2-efgs-GNN', '1-interaction-GNN', '1-interaction-GNN-naive']:
         configs = BASIC + GNN
     elif this_dic['model'] in ['Roberta']:
         configs = BASIC 

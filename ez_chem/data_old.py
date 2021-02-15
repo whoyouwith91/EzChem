@@ -11,12 +11,17 @@ from k_gnn import TwoMalkin, ConnectedThreeMalkin
 from k_gnn import DataLoader
 from featurization import *
 
+import torchtext
+from torchtext import data
+from torchtext import datasets
+from torchtext.data import TabularDataset
+
+from transformers import PreTrainedTokenizer
 from three_level_frag import cleavage, AtomListToSubMol, standize, mol2frag, WordNotFoundError, counter
 from ifg import identify_functional_groups
 import numpy as np
 
 vocab = pickle.load(open('/scratch/dz1061/gcn/datasets/EFGS/vocab/ours/ours_vocab.pt', 'rb'))
-
 def smiles2gdata(data):
     mol = Chem.MolFromSmiles(data.smiles)
     #mol = Chem.AddHs(mol)
@@ -96,49 +101,6 @@ class knnGraph(InMemoryDataset):
                 edge_index=d['edge_index'],
                 edge_attr=d['edge_attr'],
                 y=d['y'],
-                ids=d['id']
-                ) for d in raw_data_list
-        ]
-
-        if self.pre_filter is not None:
-            data_list = [data for data in data_list if self.pre_filter(data)]
-
-        if self.pre_transform is not None:
-            data_list = [self.pre_transform(data) for data in data_list]
-
-        data, slices = self.collate(data_list)
-        torch.save((data, slices), self.processed_paths[0])
-
-class knnGraph_nmr(InMemoryDataset):
-    def __init__(self,
-                 root,
-                 transform=None,
-                 pre_transform=None,
-                 pre_filter=None):
-        super(knnGraph_nmr, self).__init__(root, transform, pre_transform, pre_filter)
-        self.type = type
-        self.data, self.slices = torch.load(self.processed_paths[0])
-
-    @property
-    def raw_file_names(self):
-        return 'temp.pt'
-
-    @property
-    def processed_file_names(self):
-        return '1-2-whole.pt'
-    
-    def download(self):
-        pass
-
-    def process(self):
-        raw_data_list = torch.load(self.raw_paths[0])
-        data_list = [
-            Data(
-                x=d['x'],
-                edge_index=d['edge_index'],
-                edge_attr=d['edge_attr'],
-                y=d['y'],
-                mask=d['mask'],
                 ids=d['id']
                 ) for d in raw_data_list
         ]
@@ -566,7 +528,7 @@ class get_data_loader():
 
         if self.name == None:
            raise ValueError('Please specify one dataset you want to work on!')
-        if self.model in ['1-GNN', '1-2-GNN', '1-2-GNN_dropout', '1-2-GNN_swag', '1-2-efgs-GNN', '1-efgs-GNN', '1-interaction-GNN']:
+        if self.model in ['1-GNN', '1-2-GNN', '1-2-GNN_dropout', '1-2-GNN_swag', '1-2-efgs-GNN', '1-efgs-GNN', '1-interaction-GNN', '1-interaction-GNN-naive']:
            self.train_loader, self.val_loader, self.test_loader, self.std, self.num_features, self.num_bond_features, self.num_i_2 = self.knn_loader()
         if self.model in ['loopybp', 'wlkernel', 'loopybp_dropout', 'loopybp_swag', 'wlkernel_dropout', 'wlkernel_swag']:
            self.train_loader, self.val_loader, self.test_loader, self.std, self.num_features, self.num_bond_features, self.num_i_2 = self.bpwlkernel_loader()
@@ -619,7 +581,7 @@ class get_data_loader():
             #if self.config['train_type'] in ['transfer', 'finetuning']:
             #   num_i_2 = self.config['num_i_2']
             dataset.data.iso_type_2 = F.one_hot(dataset.data.iso_type_2, num_classes=num_i_2).to(torch.float)
-        elif self.config['model'] in ['1-interaction-GNN']:
+        elif self.config['model'] in ['1-interaction-GNN', '1-interaction-GNN-naive']:
             if self.config['dataset'] in ['sol_exp', 'ws', 'deepchem/delaney', 'deepchem/freesol', 'sol_calc/ALL', 'solOct_calc/ALL']:
                 dataset = knnGraph_interaction(root=self.config['data_path'])
                 num_features = dataset[0]['x'].shape[1]
@@ -654,8 +616,6 @@ class get_data_loader():
                dataset = knnGraph_multi1(root=self.config['data_path'])
             elif self.config['dataset'] == 'calcSolLogP':
                dataset = knnGraph_multi(root=self.config['data_path'])
-            elif self.config['dataset'] in ['nmr/hydrogen', 'nmr/carbon']:
-               dataset = knnGraph_nmr(root=self.config['data_path'])
             else:
                dataset = knnGraph(root=self.config['data_path'])
             num_i_2 = None
@@ -907,3 +867,158 @@ def construct_molecule_batch(data):
             data.batch_graph(cache=True)  # Forces computation and caching of the BatchMolGraph for the molecules
 
             return data
+
+class MolTokenizer(PreTrainedTokenizer):
+    r"""
+    Constructs a Molecular tokenizer. Based on SMILES.
+
+    This tokenizer inherits from :class:`~transformers.PreTrainedTokenizer` which contains most of the methods. Users
+    should refer to the superclass for more information regarding methods.
+
+    Args:
+        vocab_file (:obj:`string`, `optional`, defaults to ''):
+            File containing the vocabulary (torchtext.vocab.Vocab class).
+        source_files (:obj:`string`, `optional`, defaults to ''):
+            File containing source data files, vocabulary would be built based on the source file(s).
+        unk_token (:obj:`string`, `optional`, defaults to '<unk>'):
+            The unknown token. A token that is not in the vocabulary cannot be converted to an ID and is set to be this
+            token instead.
+        bos_token (:obj:`string`, `optional`, defaults to '<s>'):
+            string: a beginning of sentence token.
+        pad_token (:obj:`string`, `optional`, defaults to "<blank>"):
+            The token used for padding, for example when batching sequences of different lengths.
+        eos_token (:obj:`string`, `optional`, defaults to '</s>'):
+            string: an end of sentence token.
+        **kwargs：
+            Arguments passed to `~transformers.PreTrainedTokenizer`
+    """
+
+    def __init__(
+        self,
+        vocab_file='',
+        source_files='',
+        unk_token='<unk>',
+        bos_token='<s>',
+        pad_token="<blank>",
+        eos_token='</s>',
+        mask_token='<mask>',
+        **kwargs
+    ):
+        super().__init__(
+            unk_token=unk_token,
+            bos_token=bos_token,
+            pad_token=pad_token,
+            eos_token=eos_token,
+            mask_token=mask_token,
+            **kwargs)
+
+        self.create_vocab(vocab_file=vocab_file, source_files=source_files)
+
+    @property
+    def vocab_size(self):
+        return len(self.vocab)
+
+    def merge_vocabs(self, vocabs, vocab_size=None):
+        """
+        Merge individual vocabularies (assumed to be generated from disjoint
+        documents) into a larger vocabulary.
+        Args:
+            vocabs: `torchtext.vocab.Vocab` vocabularies to be merged
+            vocab_size: `int` the final vocabulary size. `None` for no limit.
+        Return:
+            `torchtext.vocab.Vocab`
+        """
+        merged = sum([vocab.freqs for vocab in vocabs], Counter())
+        return torchtext.vocab.Vocab(merged,
+                                     specials=[self.unk_token, self.pad_token,
+                                               self.bos_token, self.eos_token],
+                                     max_size=vocab_size)
+
+    def create_vocab(self, vocab_file=None, source_files=None):
+        """
+        Create a vocabulary from current vocabulary file or from source file(s).
+        Args:
+            vocab_file (:obj:`string`, `optional`, defaults to ''):
+                File containing the vocabulary (torchtext.vocab.Vocab class).
+            source_files (:obj:`string`, `optional`, defaults to ''):
+                File containing source data files, vocabulary would be built based on the source file(s).
+        """
+        if (not vocab_file) and (not source_files):
+            self.vocab = []
+        if vocab_file:
+            if not os.path.isfile(vocab_file):
+                raise ValueError(
+                    "Can't find a vocabulary file at path '{}'.".format(vocab_file)
+                )
+            else:
+                self.vocab = torch.load(vocab_file)
+
+        if source_files:
+            if isinstance(source_files,str):
+                if not os.path.isfile(source_files):
+                    raise ValueError(
+                        "Can't find a source file at path '{}'.".format(source_files)
+                    )
+                else:
+                    source_files = [source_files]
+            counter = {}
+            vocabs = {}
+            for i, source_file in enumerate(source_files):
+                counter[i] = Counter()
+                with open(source_file) as rf:
+                    for line in rf:
+                        items = self._tokenize(line.strip())
+                        counter[i].update(items)
+                specials = list(OrderedDict.fromkeys(
+                    tok for tok in [self.unk_token, self.pad_token, self.bos_token, self.eos_token]))
+                vocabs[i] = torchtext.vocab.Vocab(counter[i], specials=specials)
+            self.vocab = self.merge_vocabs([vocabs[i] for i in range(len(source_files))])
+            
+    def get_vocab(self):
+        return self.vocab
+
+    def _tokenize(self, text):
+        """
+        Tokenize a SMILES molecule or reaction
+        """
+        import re
+        pattern =  "(\[[^\]]+]|Br?|Cl?|N|O|S|P|F|I|b|c|n|o|s|p|\(|\)|\.|=|#|-|\+|\\\\|\/|:|~|@|\?|>|\*|\$|\%[0-9]{2}|[0-9])"
+        regex = re.compile(pattern)
+        tokens = [token for token in regex.findall(text)]
+        assert text == ''.join(tokens)
+        return tokens
+
+    def _convert_token_to_id(self, token):
+        """ Converts a token (str) in an id using the vocab. """
+        assert isinstance(self.vocab, torchtext.vocab.Vocab),\
+            'No vocabulary found! Need to be generated at initialization or using .create_vocab method.'
+        return self.vocab.stoi[token]
+
+    def _convert_id_to_token(self, index):
+        """Converts an index (integer) in a token (str) using the vocab."""
+        assert isinstance(self.vocab, torchtext.vocab.Vocab),\
+            'No vocabulary found! Need to be generated at initialization or using .create_vocab method.'
+        return self.vocab.itos[index]
+
+    def convert_tokens_to_string(self, tokens):
+        """ Converts a sequence of tokens (string) in a single string. """
+        out_string = "".join(tokens).strip()
+        return out_string
+
+    def save_vocabulary(self, vocab_path, vocab_name):
+        """
+        Save the sentencepiece vocabulary (copy original file) and special tokens file to a directory.
+
+        Args:
+            vocab_path (:obj:`str`):
+                The directory in which to save the vocabulary.
+
+        Returns:
+            :obj:`Tuple(str)`: Paths to the files saved.
+        """
+        index = 0
+        if os.path.isdir(vocab_path):
+            vocab_file = os.path.join(vocab_path, vocab_name)
+        else:
+            vocab_file = vocab_path
+        torch.save(self.vocab, vocab_file)

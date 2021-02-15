@@ -245,25 +245,8 @@ def main():
 
             print('Finishing processing {} compounds'.format(all_data.shape[0]))
 
-        elif args.solvent == 'watAppended':
-            for idx, smi, tar in zip(range(all_data.shape[0]), all_data['SMILES'], all_data['target']):
-                    molgraphs = {}
-                    
-                    mol_graph = MolGraph(smi, this_dic['model'])
-                    molgraphs['x'] = torch.FloatTensor(mol_graph.f_atoms)
-                    molgraphs['edge_attr'] = torch.FloatTensor(mol_graph.real_f_bonds)
-                    molgraphs['edge_index'] = torch.LongTensor(np.concatenate([mol_graph.at_begin, mol_graph.at_end]).reshape(2,-1))
-                    if this_dic['dataset'] not in ['zinc']:
-                        molgraphs['y'] = torch.FloatTensor([tar])
-                    molgraphs['smiles'] = smi
-                    molgraphs['id'] = torch.FloatTensor([idx])
-                    examples.append(molgraphs)
-            if not os.path.exists(os.path.join(this_dic['save_path'], args.dataset, 'graphs', args.style, this_dic['model'], 'raw')):
-                os.makedirs(os.path.join(this_dic['save_path'], args.dataset, 'graphs', args.style, this_dic['model'], 'raw'))
-            torch.save(examples, os.path.join(this_dic['save_path'], args.dataset, 'graphs', args.style, this_dic['model'], 'raw', 'temp.pt')) ###
-            print('Finishing processing {} compounds'.format(all_data.shape[0]))
-
         else:
+            
             for idx, smi, tar in zip(range(all_data.shape[0]), all_data['SMILES'], all_data['target']):
                     molgraphs = {}
                     
@@ -271,9 +254,16 @@ def main():
                     molgraphs['x'] = torch.FloatTensor(mol_graph.f_atoms)
                     molgraphs['edge_attr'] = torch.FloatTensor(mol_graph.real_f_bonds)
                     molgraphs['edge_index'] = torch.LongTensor(np.concatenate([mol_graph.at_begin, mol_graph.at_end]).reshape(2,-1))
-                    if this_dic['dataset'] not in ['zinc']:
+                    if this_dic['dataset'] not in ['zinc', 'nmr']:
                         molgraphs['y'] = torch.FloatTensor([tar])
-                    molgraphs['smiles'] = smi
+                    if this_dic['dataset'] in ['nmr']:
+                        mask = np.zeros((molgraphs['x'].shape[0], 1), dtype=np.float32)
+                        vals = np.zeros((molgraphs['x'].shape[0], 1), dtype=np.float32)
+                        for k, v in tar[0].items():
+                            mask[int(k), 0] = 1.0
+                            vals[int(k), 0] = v
+                    if this_dic['dataset'] not in ['zinc', 'nmr']:
+                        molgraphs['smiles'] = smi
                     molgraphs['id'] = torch.FloatTensor([idx])
                     examples.append(molgraphs)
             if not os.path.exists(os.path.join(this_dic['save_path'], args.dataset, 'graphs', args.style, this_dic['model'], 'raw')):
