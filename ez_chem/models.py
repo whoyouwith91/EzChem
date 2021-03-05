@@ -27,7 +27,7 @@ def get_model(config):
     if name == '1-interaction-GNN-naive':
         return GNN_1_interaction_simpler(config)
     if name == '1-interaction-GNN':
-        if config['dataset'] in ['sol_exp', 'deepchem/freesol', 'sol_calc/ALL', 'solOct_calc/ALL']:
+        if config['dataset'] in ['sol_exp', 'deepchem/freesol', 'attentiveFP/freesol', 'sol_calc/ALL', 'solOct_calc/ALL']:
             return GNN_1_interaction(config)
         if config['dataset'] in ['ws', 'deepchem/delaney']:
             return GNN_1_interaction_solubility(config)
@@ -51,11 +51,12 @@ class GNN(torch.nn.Module):
     Output:
         node representations
     """
-    def __init__(self, num_layer, emb_dim, JK = "last", drop_ratio = 0, gnn_type = "gin"):
+    def __init__(self, num_layer, emb_dim, JK = "last", drop_ratio = 0, gnn_type = "gin", rc=False):
         super(GNN, self).__init__()
         self.num_layer = num_layer
         self.drop_ratio = drop_ratio
         self.JK = JK
+        self.residual_connect = rc
 
         if self.num_layer < 2:
             raise ValueError("Number of GNN layers must be greater than 1.")
@@ -93,6 +94,9 @@ class GNN(torch.nn.Module):
         x = self.x_embedding1(x)
         h_list = [x]
         for layer in range(self.num_layer):
+            if self.residual_connect: # adding residual connection
+                if layer > 7: # need to change. currently default to 7 for 12 layers in total
+                    residual = h_list[layer]
             h = self.gnns[layer](h_list[layer], edge_index, edge_attr)
             h = self.batch_norms[layer](h)
             #h = F.dropout(F.relu(h), self.drop_ratio, training = self.training)
@@ -101,6 +105,9 @@ class GNN(torch.nn.Module):
                 h = F.dropout(h, self.drop_ratio, training = self.training)
             else:
                 h = F.dropout(F.relu(h), self.drop_ratio, training = self.training)
+            if self.residual_connect:
+                if layer > 7:
+                    h += residual
             h_list.append(h)
             
         ### Different implementations of Jk-concat
@@ -144,8 +151,9 @@ class GNN_1(torch.nn.Module):
         self.graph_pooling = config['pooling']
         self.gnn_type = config['gnn_type']
         self.propertyLevel = config['propertyLevel']
+        self.rc = config['residual_connect']
         
-        self.gnn = GNN(self.num_layer, self.emb_dim, self.JK, self.drop_ratio, self.gnn_type)
+        self.gnn = GNN(self.num_layer, self.emb_dim, self.JK, self.drop_ratio, self.gnn_type, self.rc)
         self.outLayers = nn.ModuleList()
         #Different kind of graph pooling
         if self.graph_pooling == "sum":
@@ -682,7 +690,7 @@ class GNN_1_interaction_simpler(torch.nn.Module):
 
 
     def forward(self, data):
-        if self.config['dataset'] in ['ws', 'sol_exp', 'deepchem/freesol', 'deepchem/delaney']:
+        if self.config['dataset'] in ['ws', 'sol_exp', 'deepchem/freesol', 'deepchem/delaney', 'attentiveFP/freesol']:
             solute_batch, solute_x, solute_edge_index, solute_edge_attr, solute_length_matrix, solvent_batch, solvent_x, solvent_length_matrix = \
                 data.batch, data.x, data.edge_index, data.edge_attr.long(), data.solute_length_matrix, \
                 data.solvent_batch, data.solvent_x, data.solvent_length_matrix

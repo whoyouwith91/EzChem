@@ -43,6 +43,7 @@ def main():
     parser.add_argument('--num_workers', type=int, default = 8, help='number of workers for dataset loading')
     parser.add_argument('--model', type=str, default="1-GNN")
     parser.add_argument('--EFGS', action='store_true')
+    parser.add_argument('--residual_connect', action='store_true')
     parser.add_argument('--solvent', type=str, default="")
     parser.add_argument('--interaction', type=str, default="")
     parser.add_argument('--pooling', type=str, default='add')
@@ -148,15 +149,43 @@ def main():
     if this_dic['train_type'] in ['finetuning', 'transfer']:
         #list_of_files = glob.glob(os.path.join('/scratch/dz1061/gcn/chemGraph/results',args.preTrainedData, args.model, args.gnn_type, 'Pre_training', 'seed_31', 'best_model/', '*.pt'))
         #latest_file = max(list_of_files, key=os.path.getctime)
-        latest_file = os.path.join('/scratch/dz1061/gcn/chemGraph/results',args.preTrainedData, args.model, args.gnn_type, 'Pre_training', 'seed_31', 'best_model/', 'bestModel.pt')
+        #latest_file = os.path.join('/scratch/dz1061/gcn/chemGraph/results',args.preTrainedData, args.model, args.gnn_type, 'preTraining', 'Exp_layer5_dim64', 'seed_31', 'best_model/', 'bestModel.pt')
+        if args.model in ['1-GNN']:
+            latest_file = os.path.join('/scratch/dz1061/gcn/chemGraph/results',args.preTrainedData, '1-GNN', args.gnn_type, 'newData', 'Exp_layer12_dim256_decay', 'seed_1', 'best_model/', 'bestModel.pt')
+            model.from_pretrained(latest_file)
+
         if args.model == '1-2-GNN':
-            latest_file = os.path.join('/scratch/dz1061/gcn/chemGraph/results',args.preTrainedData, '1-2-GNN', args.gnn_type, 'Pre_training', 'seed_31', 'best_model/', 'bestModel.pt')
+            #latest_file = os.path.join('/scratch/dz1061/gcn/chemGraph/results',args.preTrainedData, '1-2-GNN', args.gnn_type, 'preTraining', 'Exp_layer5_dim64', 'seed_31', 'best_model/', 'bestModel.pt')  #from sol_calc
+            #latest_file = os.path.join('/scratch/dz1061/gcn/chemGraph/results',args.preTrainedData, '1-2-GNN', args.gnn_type, 'newFinetuningFromsol_calc/ALL', 'Exp_layer5_dim64', 'seed_31', 'best_model/', 'bestModel.pt') # from finetuning on itself
+            #latest_file = os.path.join('/scratch/dz1061/gcn/chemGraph/results',args.preTrainedData, '1-2-GNN', args.gnn_type, 'newData', 'Exp_layer5_dim64', 'seed_31', 'best_model/', 'bestModel.pt') # from train from scratch itself
+            latest_file = os.path.join('/scratch/dz1061/gcn/chemGraph/results',args.preTrainedData, '1-2-GNN', args.gnn_type, 'preTraining/all', 'Exp_layer5_dim256', 'seed_1', 'best_model/', 'bestModel.pt')
+            #conv1_file = os.path.join('/scratch/dz1061/gcn/chemGraph/results',args.preTrainedData, '1-2-GNN', args.gnn_type, 'loopFinetuningFrompka', 'Exp_layer5_dim64', 'seed_31', 'best_model/', 'convISO1.pt')
+            #conv2_file = os.path.join('/scratch/dz1061/gcn/chemGraph/results',args.preTrainedData, '1-2-GNN', args.gnn_type, 'loopFinetuningFrompka', 'Exp_layer5_dim64', 'seed_31', 'best_model/', 'convISO2.pt')
             model.from_pretrained(latest_file)
-        else:
-            model.from_pretrained(latest_file)
+
+        if args.model in ['1-interaction-GNN']:
+            solute_latest_file = os.path.join('/scratch/dz1061/gcn/chemGraph/results', args.preTrainedData, '1-interaction-GNN', args.gnn_type, 'preTraining/all', 'Exp_layer5_dim64', 'seed_31', 'best_model/', 'bestModel_solute.pt')
+            solvent_latest_file = os.path.join('/scratch/dz1061/gcn/chemGraph/results', args.preTrainedData, '1-interaction-GNN', args.gnn_type, 'preTraining/all', 'Exp_layer5_dim64', 'seed_31', 'best_model/', 'bestModel_solvent.pt')
+            model.from_pretrained(solute_latest_file, solvent_latest_file)
+
     if this_dic['train_type'] == 'transfer': # freeze encoder layers
-        for params in model.gnn.parameters():
-            params.requires_grad = False
+        if this_dic['model'] in ['1-GNN']:
+            for params in model.gnn.parameters():
+                params.requires_grad = False
+        if this_dic['model'] in ['1-2-GNN']:
+            for params in model.gnn.parameters():
+                params.requires_grad = False
+            #for params in model.ISO1.parameters():
+            #    params.requires_grad = False
+            #for params in model.ISO2.parameters():
+            #    params.requires_grad = False
+        if this_dic['model'] in ['1-interaction-GNN']:
+            for params in model.gnn_solute.parameters():
+                params.requires_grad = False
+            for params in model.gnn_solvent.parameters():
+                params.requires_grad = False
+
+
 
     this_dic['NumParas'] = count_parameters(model)
     model_ = model.to(device)
@@ -179,17 +208,18 @@ def main():
          loss = train(model_, optimizer, train_loader, this_dic)
          time_toc = time.time()
 
-         if this_dic['dataset'] in ['mp', 'xlogp3', 'calcSolLogP']:
+         if this_dic['dataset'] in ['mp', 'mp_drugs', 'xlogp3', 'calcSolLogP', 'sol_calc/ALL', 'solOct_calc/ALL', 'solWithWater_calc/ALL', 'qm9/nmr/carbon', 'qm9/nmr/hydrogen']:
+            train_error = loss
             #train_error = np.asscalar(loss.data.cpu().numpy()) # don't test the entire train set.
-            train_error = loss.item()
+            #train_error = test(model_, loader.part_train_loader, this_dic)
          else:
             train_error = test(model_, train_loader, this_dic)
          val_error = test(model_, val_loader, this_dic)
 
-         if args.style == 'base':
+         if args.style in ['base', 'preTraining']:
             test_error = test(model_, test_loader, this_dic)
-         if args.style == 'preTraining':
-            test_error = 0.
+         #if args.style == 'preTraining':
+         #   test_error = 0.
          if this_dic['lr_style'] == 'decay':
             scheduler.step(val_error)
 

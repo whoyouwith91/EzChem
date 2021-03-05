@@ -78,8 +78,11 @@ def train(model, optimizer, dataloader, config):
     Define loss and backpropagation
     '''
     model.train()
-    y = []
-    means = []
+    #y = []
+    #means = []
+    all_loss = 0
+    if config['propertyLevel'] == 'atom':
+        all_atoms = 0
 
     for data in dataloader:
         if config['gnn_type'] not in ['loopybp', 'wlkernel', 'loopybp_dropout', 'wlkernel_dropout', 'loopybp_swag', 'wlkernel_swag']:
@@ -94,13 +97,17 @@ def train(model, optimizer, dataloader, config):
         y0, _ = model(data)
         if config['taskType'] == 'single' and config['propertyLevel'] == 'molecule':
             loss = get_loss_fn(config['loss'])(y0, data.y)
+            all_loss += loss.item() * data.num_graphs
         if config['taskType'] == 'multi' and config['dataset'] == 'calcSolLogP':
             loss = get_loss_fn(config['loss'])(y0[:,0], data.y) + get_loss_fn(config['loss'])(y0[:,1], data.y1) + get_loss_fn(config['loss'])(y0[:,2], data.y2)
         if config['dataset'] == 'commonProperties':
             loss = get_loss_fn(config['loss'])(y0[:,0], data.y) + get_loss_fn(config['loss'])(y0[:,1], data.y1) + get_loss_fn(config['loss'])(y0[:,2], data.y2) + get_loss_fn(config['loss'])(y0[:,3], data.y3)
+            all_loss += loss.item() * data.num_graphs
         if config['propertyLevel'] == 'atom':
             #print(y0[data.mask>0])
             loss = get_loss_fn(config['loss'])(data.y, y0, data.mask)
+            all_atoms += data.mask.sum()
+            all_loss += loss.item() * data.mask.sum()
             #print(loss)
             #sys.stdout.flush()
 
@@ -108,13 +115,16 @@ def train(model, optimizer, dataloader, config):
         if config['optimizer'] in ['sgd']:
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.)
         optimizer.step()
-        y.extend(data.y.cpu().data.numpy())
-        means.extend(y0.cpu().data.numpy())
-    if config['dataset'] in ['mp', 'mp_drugs']:
-        rmse = np.mean((np.array(means).reshape(-1,) - np.array(y).squeeze())**2.)**0.5
-        return rmse
-    else:
-        return loss
+        #y.extend(data.y.cpu().data.numpy())
+        #means.extend(y0.cpu().data.numpy())
+    #if config['dataset'] in ['mp', 'mp_drugs']:
+    #    rmse = np.mean((np.array(means).reshape(-1,) - np.array(y).squeeze())**2.)**0.5
+    #    return rmse
+    #else:
+    if config['propertyLevel'] == 'atom':
+        return np.sqrt(all_loss.item() / all_atoms.item())
+    if config['propertyLevel'] == 'molecule':
+        return np.sqrt(all_loss / len(dataloader.dataset))
 
 def test(model, dataloader, config):
     '''
