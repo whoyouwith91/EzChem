@@ -47,7 +47,7 @@ allowable_features = {
     'possible_bond_dirs' : [ # only for double bond stereo information
         Chem.rdchem.BondDir.NONE,
         Chem.rdchem.BondDir.ENDUPRIGHT,
-        Chem.rdchem.BondDir.ENDDOWNRIGHT
+        Chem.rdchem.BondDir.ENDDOWNRIGHT,
     ]
 }
 

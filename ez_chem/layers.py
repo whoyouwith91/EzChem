@@ -1,10 +1,18 @@
+from typing import Union, Tuple, Callable
+from torch_geometric.typing import OptTensor, OptPairTensor, Adj, Size
+from torch.nn import Parameter
+
 import numpy as np
 import torch
 import torch.nn as nn
 from torch.nn import GRU, LSTM
 import torch.nn.functional as F
-from torch.nn import Sequential, Linear, ReLU, LeakyReLU, ELU, Tanh
+from torch.nn import ModuleList, Sequential, Linear, ReLU, LeakyReLU, ELU, Tanh
 from torch_scatter import scatter_mean
+from torch_scatter import scatter
+from typing import Optional, List, Dict
+from torch_geometric.typing import Adj, OptTensor
+
 from torch_geometric.nn import MessagePassing
 from torch_geometric.nn import NNConv, GATConv, GraphConv
 from torch_geometric.utils import add_self_loops, degree, softmax
@@ -102,7 +110,7 @@ class GCNConv(MessagePassing):
         return norm.view(-1, 1) * (x_j + edge_attr)
 
 class GATCon(MessagePassing):
-    def __init__(self, emb_dim, heads=2, negative_slope=0.2, aggr = "add"):
+    def __init__(self, emb_dim, heads=8, negative_slope=0.2, aggr = "add"):
         super(GATCon, self).__init__()
 
         self.aggr = aggr
@@ -218,7 +226,7 @@ class GraphSAGEConv(MessagePassing):
         return F.normalize(aggr_out, p = 2, dim = -1)
 
 class NNCon(torch.nn.Module):
-    def __init__(self, emb_dim):
+    def __init__(self, emb_dim, aggregate):
         super(NNCon, self).__init__()
         self.emb_dim = emb_dim
         self.edge_embedding1 = torch.nn.Embedding(num_bond_type, emb_dim)
@@ -229,7 +237,7 @@ class NNCon(torch.nn.Module):
 
         M_in, B_in, M_out = emb_dim, emb_dim, emb_dim 
         ll = Sequential(Linear(B_in, 128), nn.ReLU(), Linear(128, M_in * M_out))
-        self.conv_ = NNConv(M_in, M_out, ll)
+        self.conv_ = NNConv(M_in, M_out, ll, aggr=aggregate)
 
     def forward(self, x, edge_index, edge_attr):
         edge_index = add_self_loops(edge_index, num_nodes = x.size(0))
@@ -312,3 +320,292 @@ class NNDropout(nn.Module):
         x /= retain_prob
         
         return x
+
+class PNAConv_rev(MessagePassing):
+    def __init__(self, emb_dim, aggr='', deg=0, towers=4, pre_layers=1, post_layers=1, divide_input=False):
+        super(PNAConv_rev, self).__init__()
+        self.emb_dim = emb_dim
+        self.edge_embedding1 = torch.nn.Embedding(num_bond_type, emb_dim)
+        self.edge_embedding2 = torch.nn.Embedding(num_bond_direction, emb_dim)
+
+        torch.nn.init.xavier_uniform_(self.edge_embedding1.weight.data)
+        torch.nn.init.xavier_uniform_(self.edge_embedding2.weight.data)
+        
+        if aggr == 'pna': 
+            aggregators = ['mean', 'min', 'max', 'std']
+            scalers = ['identity', 'amplification', 'attenuation']
+        if aggr == 'add':
+            aggregators = ['sum']
+            scalers = ['identity']
+        if aggr == 'mean':
+            aggregators = ['mean']
+            scalers = ['identity']
+        if aggr == 'max':
+            aggregators = ['max']
+            scalers = ['identity']
+
+        self.conv_ = PNA(self.emb_dim, self.emb_dim, aggregators=aggregators, scalers=scalers, deg=deg, edge_dim=self.emb_dim, towers=towers, pre_layers=pre_layers, post_layers=post_layers, divide_input=False)
+
+    def forward(self, x, edge_index, edge_attr):
+        edge_index = add_self_loops(edge_index, num_nodes = x.size(0))
+
+        #add features corresponding to self-loop edges.
+        self_loop_attr = torch.zeros(x.size(0), 2)
+        self_loop_attr[:,0] = 4 #bond type for self-loop edge
+        self_loop_attr = self_loop_attr.to(edge_attr.device).to(edge_attr.dtype)
+        edge_attr = torch.cat((edge_attr, self_loop_attr), dim = 0)
+
+        edge_embeddings = self.edge_embedding1(edge_attr[:,0]) + self.edge_embedding2(edge_attr[:,1])
+
+        return self.conv_(x, edge_index[0], edge_embeddings)
+
+class PNA(MessagePassing):
+    def __init__(self, in_channels: int, out_channels: int,
+                 aggregators: List[str], scalers: List[str], deg: Tensor,
+                 edge_dim: Optional[int] = None, towers: int = 1,
+                 pre_layers: int = 1, post_layers: int = 1,
+                 divide_input: bool = False, **kwargs):
+
+        kwargs.setdefault('aggr', None)
+        super(PNA, self).__init__(node_dim=0, **kwargs)
+
+        if divide_input:
+            assert in_channels % towers == 0
+        assert out_channels % towers == 0
+
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.aggregators = aggregators
+        self.scalers = scalers
+        self.edge_dim = edge_dim
+        self.towers = towers
+        self.divide_input = divide_input
+
+        self.F_in = in_channels // towers if divide_input else in_channels
+        self.F_out = self.out_channels // towers
+
+        deg = deg.to(torch.float)
+        self.avg_deg: Dict[str, float] = {
+            'lin': deg.mean().item(),
+            'log': (deg + 1).log().mean().item(),
+            'exp': deg.exp().mean().item(),
+        }
+
+        if self.edge_dim is not None:
+            self.edge_encoder = Linear(edge_dim, self.F_in)
+
+        self.pre_nns = ModuleList()
+        self.post_nns = ModuleList()
+        for _ in range(towers):
+            modules = [Linear((3 if edge_dim else 2) * self.F_in, self.F_in)]
+            for _ in range(pre_layers - 1):
+                modules += [ReLU()]
+                modules += [Linear(self.F_in, self.F_in)]
+            self.pre_nns.append(Sequential(*modules))
+
+            in_channels = (len(aggregators) * len(scalers) + 1) * self.F_in
+            modules = [Linear(in_channels, self.F_out)]
+            for _ in range(post_layers - 1):
+                modules += [ReLU()]
+                modules += [Linear(self.F_out, self.F_out)]
+            self.post_nns.append(Sequential(*modules))
+
+        self.lin = Linear(out_channels, out_channels)
+
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        if self.edge_dim is not None:
+            self.edge_encoder.reset_parameters()
+        for nn in self.pre_nns:
+            reset(nn)
+        for nn in self.post_nns:
+            reset(nn)
+        self.lin.reset_parameters()
+
+    def forward(self, x: Tensor, edge_index: Adj,
+                edge_attr: OptTensor = None) -> Tensor:
+        """"""
+
+        if self.divide_input:
+            x = x.view(-1, self.towers, self.F_in)
+        else:
+            x = x.view(-1, 1, self.F_in).repeat(1, self.towers, 1)
+
+        # propagate_type: (x: Tensor, edge_attr: OptTensor)
+        out = self.propagate(edge_index, x=x, edge_attr=edge_attr, size=None)
+
+        out = torch.cat([x, out], dim=-1)
+        outs = [nn(out[:, i]) for i, nn in enumerate(self.post_nns)]
+        out = torch.cat(outs, dim=1)
+
+        return self.lin(out)
+
+    def message(self, x_i: Tensor, x_j: Tensor,
+                edge_attr: OptTensor) -> Tensor:
+    
+        h: Tensor = x_i  # Dummy.
+        if edge_attr is not None:
+            edge_attr = self.edge_encoder(edge_attr)
+            edge_attr = edge_attr.view(-1, 1, self.F_in)
+            edge_attr = edge_attr.repeat(1, self.towers, 1)
+            h = torch.cat([x_i, x_j, edge_attr], dim=-1)
+        else:
+            h = torch.cat([x_i, x_j], dim=-1)
+    
+        hs = [nn(h[:, i]) for i, nn in enumerate(self.pre_nns)]
+        return torch.stack(hs, dim=1)
+    
+
+    def aggregate(self, inputs: Tensor, index: Tensor,
+                  dim_size: Optional[int] = None) -> Tensor:
+
+        outs = []
+        for aggregator in self.aggregators:
+            if aggregator == 'sum':
+                out = scatter(inputs, index, 0, None, dim_size, reduce='sum')
+            elif aggregator == 'mean':
+                out = scatter(inputs, index, 0, None, dim_size, reduce='mean')
+            elif aggregator == 'min':
+                out = scatter(inputs, index, 0, None, dim_size, reduce='min')
+            elif aggregator == 'max':
+                out = scatter(inputs, index, 0, None, dim_size, reduce='max')
+            elif aggregator == 'var' or aggregator == 'std':
+                mean = scatter(inputs, index, 0, None, dim_size, reduce='mean')
+                mean_squares = scatter(inputs * inputs, index, 0, None,
+                                       dim_size, reduce='mean')
+                out = mean_squares - mean * mean
+                if aggregator == 'std':
+                    out = torch.sqrt(torch.relu(out) + 1e-5)
+            else:
+                raise ValueError(f'Unknown aggregator "{aggregator}".')
+            outs.append(out)
+        out = torch.cat(outs, dim=-1)
+
+        deg = degree(index, dim_size, dtype=inputs.dtype)
+        deg = deg.clamp_(1).view(-1, 1, 1)
+
+        outs = []
+        for scaler in self.scalers:
+            if scaler == 'identity':
+                pass
+            elif scaler == 'amplification':
+                out = out * (torch.log(deg + 1) / self.avg_deg['log'])
+            elif scaler == 'attenuation':
+                out = out * (self.avg_deg['log'] / torch.log(deg + 1))
+            elif scaler == 'linear':
+                out = out * (deg / self.avg_deg['lin'])
+            elif scaler == 'inverse_linear':
+                out = out * (self.avg_deg['lin'] / deg)
+            else:
+                raise ValueError(f'Unknown scaler "{scaler}".')
+            outs.append(out)
+        return torch.cat(outs, dim=-1)
+
+    def __repr__(self):
+        return (f'{self.__class__.__name__}({self.in_channels}, '
+                f'{self.out_channels}, towers={self.towers}, '
+                f'edge_dim={self.edge_dim})')
+
+class NNConv_rev(MessagePassing):
+    def __init__(self, in_channels: Union[int, Tuple[int, int]],
+                 out_channels: int, aggregators: List[str], scalers: List[str], deg: Tensor,
+                 root_weight: bool = True, bias: bool = True, **kwargs):
+        super(NNConv_rev, self).__init__(**kwargs)
+
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.edge_embedding1 = torch.nn.Embedding(num_bond_type, out_channels)
+        self.edge_embedding2 = torch.nn.Embedding(num_bond_direction, out_channels)
+
+        M_in, B_in, M_out = out_channels, out_channels, out_channels
+        self.nn = Sequential(Linear(B_in, 128), nn.ReLU(), Linear(128, M_in * M_out))
+        self.aggregators = aggregators
+        self.scalers = scalers
+
+        deg = deg.to(torch.float)
+        self.avg_deg: Dict[str, float] = {
+            'lin': deg.mean().item(),
+            'log': (deg + 1).log().mean().item(),
+            'exp': deg.exp().mean().item(),
+        }
+
+        if isinstance(in_channels, int):
+            in_channels = (in_channels, in_channels)
+
+        self.in_channels_l = in_channels[0]
+        self.lin = Linear(self.out_channels*12, self.out_channels)
+
+    def forward(self, x: Union[Tensor, OptPairTensor], edge_index: Adj,
+                edge_attr: OptTensor = None, size: Size = None) -> Tensor:
+        """"""
+        
+        edge_index = add_self_loops(edge_index, num_nodes = x.size(0))
+
+        #add features corresponding to self-loop edges.
+        self_loop_attr = torch.zeros(x.size(0), 2)
+        self_loop_attr[:,0] = 4 #bond type for self-loop edge
+        self_loop_attr = self_loop_attr.to(edge_attr.device).to(edge_attr.dtype)
+        edge_attr = torch.cat((edge_attr, self_loop_attr), dim = 0)
+
+        edge_embeddings = self.edge_embedding1(edge_attr[:,0]) + self.edge_embedding2(edge_attr[:,1])
+
+        # propagate_type: (x: OptPairTensor, edge_attr: OptTensor)
+        out = self.propagate(edge_index[0], x=x, edge_attr=edge_embeddings, size=size)
+        out = F.relu(self.lin(out))
+        return out
+
+
+    def message(self, x_j: Tensor, edge_attr: Tensor) -> Tensor:
+        weight = self.nn(edge_attr)
+        weight = weight.view(-1, self.in_channels_l, self.out_channels)
+        return torch.matmul(x_j.unsqueeze(1), weight).squeeze(1)
+
+    def aggregate(self, inputs: Tensor, index: Tensor,
+                  dim_size: Optional[int] = None) -> Tensor:
+
+        outs = []
+        #print(inputs.shape, index.shape)
+        for aggregator in self.aggregators:
+            if aggregator == 'sum':
+                out = scatter(inputs, index, 0, None, dim_size, reduce='sum')
+                #print(out.shape)
+            elif aggregator == 'mean':
+                out = scatter(inputs, index, 0, None, dim_size, reduce='mean')
+                #print(out.shape)
+            elif aggregator == 'min':
+                out = scatter(inputs, index, 0, None, dim_size, reduce='min')
+            elif aggregator == 'max':
+                out = scatter(inputs, index, 0, None, dim_size, reduce='max')
+            elif aggregator == 'var' or aggregator == 'std':
+                mean = scatter(inputs, index, 0, None, dim_size, reduce='mean')
+                mean_squares = scatter(inputs * inputs, index, 0, None,
+                                       dim_size, reduce='mean')
+                out = mean_squares - mean * mean
+                if aggregator == 'std':
+                    out = torch.sqrt(torch.relu(out) + 1e-5)
+            else:
+                raise ValueError(f'Unknown aggregator "{aggregator}".')
+            outs.append(out)
+        out = torch.cat(outs, dim=-1)
+
+        deg = degree(index, dim_size, dtype=inputs.dtype)
+        deg = deg.clamp_(1).view(-1, 1)
+
+        outs = []
+        for scaler in self.scalers:
+            if scaler == 'identity':
+                pass
+            elif scaler == 'amplification':
+                out = out * (torch.log(deg + 1) / self.avg_deg['log'])
+            elif scaler == 'attenuation':
+                out = out * (self.avg_deg['log'] / torch.log(deg + 1))
+            elif scaler == 'linear':
+                out = out * (deg / self.avg_deg['lin'])
+            elif scaler == 'inverse_linear':
+                out = out * (self.avg_deg['lin'] / deg)
+            else:
+                raise ValueError(f'Unknown scaler "{scaler}".')
+            outs.append(out)
+            #print(out.shape)
+        return torch.cat(outs, dim=-1)
