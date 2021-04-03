@@ -547,6 +547,115 @@ class knnGraph_interaction_logp(InMemoryDataset):
         data, slices = self.collate(data_list)
         torch.save((data, slices), self.processed_paths[0])
 
+def collate_WithWater(data_list):
+        keys = data_list[0].keys
+        assert 'batch' not in keys
+
+        batch = Batch()
+        for key in keys:
+            batch[key] = []
+        batch.batch = []
+        batch.num_nodes = []
+        batch.solute_length_matrix = []
+
+        if 'hyd_solute_x' in keys:
+            batch.hyd_solute_batch = []
+            batch.hyd_solute_num_nodes = []
+
+        if 'hyd_solute_edge_index' in keys:
+            keys.remove('hyd_solute_edge_index')
+        if 'edge_index' in keys:
+            keys.remove('edge_index')
+
+        props = [
+            'edge_index_2', 'assignment_index_2', 'edge_index_3',
+            'assignment_index_3', 'assignment_index_2to3'
+        ]
+        keys = [x for x in keys if x not in props]
+
+        cumsum_1 = N_1 = cumsum_2 = N_2 = cumsum_3 = N_3 = 0
+
+        for i, data in enumerate(data_list):
+            for key in keys:
+                batch[key].append(data[key])
+
+            N_1 = data.x.shape[0]
+            #print(N_1)
+            batch.edge_index.append(data.edge_index + cumsum_1)
+            batch.batch.append(torch.full((N_1, ), i, dtype=torch.long))
+            batch.num_nodes.append(N_1)
+
+            if 'hyd_solute_x' in data:
+                N_2 = data.hyd_solute_x.shape[0]
+                batch.hyd_solute_num_nodes.append(N_2)
+                batch.hyd_solute_batch.append(torch.full((N_2, ), i, dtype=torch.long))
+                if 'hyd_solute_edge_index' in data:
+                    batch.hyd_solute_edge_index.append(data.hyd_solute_edge_index + cumsum_2)
+
+            cumsum_1 += N_1
+            cumsum_2 += N_2
+
+        keys = [x for x in batch.keys if x not in ['batch', 'hyd_solute_batch', 'solute_length_matrix', 'hyd_solute_length_matrix']]
+
+        for key in keys:
+            if torch.is_tensor(batch[key][0]):
+                batch[key] = torch.cat(
+                    batch[key], dim=data_list[0].__cat_dim__(key, batch[key][0]))
+
+        batch.batch = torch.cat(batch.batch, dim=-1)
+        if 'hyd_solute_x' in data:
+            batch.hyd_solute_batch = torch.cat(batch.hyd_solute_batch, dim=-1)
+        return batch.contiguous()
+
+class knnGraph_WithWater(InMemoryDataset):
+    def __init__(self,
+                 root,
+                 transform=None,
+                 pre_transform=None,
+                 pre_filter=None):
+        super(knnGraph_WithWater, self).__init__(root, transform, pre_transform, pre_filter)
+        self.type = type
+        self.data, self.slices = torch.load(self.processed_paths[0])
+
+    @property
+    def raw_file_names(self):
+        return ['solute_temp.pt', 'hydrated_solute_temp.pt']
+
+    @property
+    def processed_file_names(self):
+        return '1-GNN-withWater.pt'
+
+    def download(self):
+        pass
+
+    def process(self):
+        raw_solute_data = torch.load(self.raw_paths[0])
+        raw_hydrated_solute_data = torch.load(self.raw_paths[1])
+
+        data_list = [
+            Data(
+                x=solute['x'],
+                edge_index=solute['edge_index'],
+                edge_attr=solute['edge_attr'],
+                y=solute['y'],
+                ids=solute['id'],
+                hyd_solute_x=hyd_solute['x'],
+                hyd_solute_edge_index=hyd_solute['edge_index'],
+                hyd_solute_edge_attr=hyd_solute['edge_attr'],
+                hyd_solute_mask=hyd_solute['mask']
+
+                ) for solute, hyd_solute in zip(raw_solute_data, raw_hydrated_solute_data)
+        ]
+
+        if self.pre_filter is not None:
+            data_list = [data for data in data_list if self.pre_filter(data)]
+
+        if self.pre_transform is not None:
+            data_list = [self.pre_transform(data) for data in data_list]
+
+        data, slices = self.collate(data_list)
+        torch.save((data, slices), self.processed_paths[0])
+
 class DataLoader_interaction(torch.utils.data.DataLoader):
     def __init__(self, dataset, **kwargs):
         super(DataLoader_interaction, self).__init__(dataset, collate_fn=collate, **kwargs)
@@ -554,6 +663,10 @@ class DataLoader_interaction(torch.utils.data.DataLoader):
 class DataLoader_interaction_logp(torch.utils.data.DataLoader):
     def __init__(self, dataset, **kwargs):
         super(DataLoader_interaction_logp, self).__init__(dataset, collate_fn=collate_logp, **kwargs)
+
+class DataLoader_WithWater(torch.utils.data.DataLoader):
+    def __init__(self, dataset, **kwargs):
+        super(DataLoader_WithWater, self).__init__(dataset, collate_fn=collate_WithWater, **kwargs)
 #------------------------ Interaction ----------------------------------------------
 
 class get_data_loader():
@@ -620,7 +733,7 @@ class get_data_loader():
             #   num_i_2 = self.config['num_i_2']
             dataset.data.iso_type_2 = F.one_hot(dataset.data.iso_type_2, num_classes=num_i_2).to(torch.float)
         elif self.config['model'] in ['1-interaction-GNN']:
-            if self.config['dataset'] in ['sol_exp', 'ws', 'deepchem/delaney', 'deepchem/freesol', 'sol_calc/ALL', 'solOct_calc/ALL']:
+            if self.config['dataset'] in ['sol_exp', 'ws', 'deepchem/delaney', 'deepchem/freesol', 'attentiveFP/delaney',  'attentiveFP/freesol', 'sol_calc/ALL', 'solOct_calc/ALL']:
                 dataset = knnGraph_interaction(root=self.config['data_path'])
                 num_features = dataset[0]['x'].shape[1]
                 num_bond_features = dataset[0]['edge_attr'].shape[1]
@@ -633,8 +746,10 @@ class get_data_loader():
                 test_loader = DataLoader_interaction(test_dataset, batch_size=self.config['batch_size'], num_workers=0)
                 val_loader = DataLoader_interaction(val_dataset, batch_size=self.config['batch_size'], num_workers=0)
                 train_loader = DataLoader_interaction(train_dataset, batch_size=self.config['batch_size'], num_workers=0, shuffle=True)
+                #part_train_loader = DataLoader_interaction(train_dataset[:10000], batch_size=self.config['batch_size'], num_workers=0)
+
                 return train_loader,  val_loader, test_loader, None, num_features, num_bond_features, None
-            else:
+            elif self.config['dataset'] in ['logp', 'deepchem/logp']:
                 dataset = knnGraph_interaction_logp(root=self.config['data_path'])
                 num_features = dataset[0]['x'].shape[1]
                 num_bond_features = dataset[0]['edge_attr'].shape[1]
@@ -647,6 +762,22 @@ class get_data_loader():
                 test_loader = DataLoader_interaction_logp(test_dataset, batch_size=self.config['batch_size'], num_workers=0)
                 val_loader = DataLoader_interaction_logp(val_dataset, batch_size=self.config['batch_size'], num_workers=0)
                 train_loader = DataLoader_interaction_logp(train_dataset, batch_size=self.config['batch_size'], num_workers=0, shuffle=True)
+                #part_train_loader = DataLoader_interaction_logp(train_dataset[:10000], batch_size=self.config['batch_size'], num_workers=0, shuffle=True)
+                return train_loader,  val_loader, test_loader, None, num_features, num_bond_features, None
+            elif self.config['dataset'] in ['solWithWater', 'solWithWater_calc/ALL', 'logpWithWater']:
+                dataset = knnGraph_WithWater(root=self.config['data_path'])
+                num_features = dataset[0]['x'].shape[1]
+                num_bond_features = dataset[0]['edge_attr'].shape[1]
+                my_split_ratio = [self.train_size, self.val_size]  #my dataseet
+                test_dataset = dataset[my_split_ratio[0]+my_split_ratio[1]:]
+                rest_dataset = dataset[:my_split_ratio[0]+my_split_ratio[1]]
+                train_dataset = rest_dataset[:my_split_ratio[0]]
+                val_dataset = rest_dataset[my_split_ratio[0]:]
+
+                test_loader = DataLoader_WithWater(test_dataset, batch_size=self.config['batch_size'], num_workers=0)
+                val_loader = DataLoader_WithWater(val_dataset, batch_size=self.config['batch_size'], num_workers=0)
+                train_loader = DataLoader_WithWater(train_dataset, batch_size=self.config['batch_size'], num_workers=0, shuffle=True)
+
                 return train_loader,  val_loader, test_loader, None, num_features, num_bond_features, None
 
         else: # 1-GNN
@@ -654,7 +785,7 @@ class get_data_loader():
                dataset = knnGraph_multi1(root=self.config['data_path'])
             elif self.config['dataset'] == 'calcSolLogP':
                dataset = knnGraph_multi(root=self.config['data_path'])
-            elif self.config['dataset'] in ['nmr/hydrogen', 'nmr/carbon']:
+            elif self.config['dataset'] in ['qm9/nmr/carbon', 'qm9/nmr/carbon/smaller', 'qm9/nmr/hydrogen', 'qm9/nmr/allAtoms', 'nmr/hydrogen', 'nmr/carbon']:
                dataset = knnGraph_nmr(root=self.config['data_path'])
             else:
                dataset = knnGraph(root=self.config['data_path'])
@@ -687,6 +818,7 @@ class get_data_loader():
             test_loader = DataLoader(test_dataset, batch_size=self.config['batch_size'], num_workers=0)
             val_loader = DataLoader(val_dataset, batch_size=self.config['batch_size'], num_workers=0)
             train_loader = DataLoader(train_dataset, batch_size=self.config['batch_size'], num_workers=0, shuffle=True)
+            #part_train_loader = DataLoader(train_dataset[:10000], batch_size=self.config['batch_size'], num_workers=0)
 
             return train_loader, val_loader, test_loader, std, num_features, num_bond_features, num_i_2
 

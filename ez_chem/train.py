@@ -44,9 +44,12 @@ def main():
     parser.add_argument('--model', type=str, default="1-GNN")
     parser.add_argument('--EFGS', action='store_true')
     parser.add_argument('--residual_connect', action='store_true')
+    parser.add_argument('--resLayer', type=int, default=-1)
     parser.add_argument('--solvent', type=str, default="")
     parser.add_argument('--interaction', type=str, default="")
-    parser.add_argument('--pooling', type=str, default='add')
+    parser.add_argument('--pooling', type=str, default='sum')
+    parser.add_argument('--aggregate', type=str, default='add')
+    parser.add_argument('--degree', type=int, default=0)
     parser.add_argument('--gnn_type', type=str, default="gin")
     parser.add_argument('--JK', type=str, default="last",
                         help='how the node features are combined across layers. last, sum, max or concat')
@@ -110,7 +113,7 @@ def main():
         dataSizes = json.load(f)
     #this_dic['train_size'] = int(dataSizes[args.dataset]['train_size'])
     #this_dic['val_size'] = int(dataSizes[args.dataset]['val_size'])
-    if args.dataset in ['sol_calc/ALL', 'solOct_calc/ALL', 'logp_calc/ALL', 'calcSolLogP', 'xlogp3'] and args.style == 'preTraining':
+    if args.dataset in ['sol_calc/ALL', 'solOct_calc/ALL', 'logp_calc/ALL', 'calcSolLogP', 'xlogp3', 'solWithWater_calc/ALL'] and args.style == 'preTraining':
         this_dic['train_size'] = int(dataSizes[args.dataset+'/COMPLETE']['train_size'])
         this_dic['val_size'] = int(dataSizes[args.dataset+'/COMPLETE']['val_size'])
     else:
@@ -130,6 +133,12 @@ def main():
     this_dic['num_features'], this_dic['num_bond_features'], this_dic['num_i_2'], this_dic['std'] = int(num_features), num_bond_features, num_i_2, std
     this_dic['train_size'], this_dic['val_size'], this_dic['test_size'] = len(train_loader.dataset), len(val_loader.dataset), len(test_loader.dataset)
     this_dic['num_layer'] = args.num_layer
+    if args.gnn_type == 'pnaconv':
+        deg = torch.zeros(7, dtype=torch.long)
+        for data in train_loader:
+            d = degree(data.edge_index[1], num_nodes=data.num_nodes, dtype=torch.long)
+            deg += torch.bincount(d, minlength=deg.numel())
+        this_dic['degree'] = deg
 
     if args.style == 'best': # todo
         with open(os.path.join(args.running_path, args.dataset, args.model, args.gnn_type, 'Exp_{}_l2/seed_31'.format(args.pooling), 'hpsearch.json'), 'r') as f:
@@ -142,6 +151,9 @@ def main():
         this_dic['soluteSelf'] = True
     else:
         this_dic['soluteSelf'] = False
+
+    if args.residual_connect:
+        this_dic['resLayer'] = args.resLayer
     model = get_model(this_dic)
 
     if this_dic['train_type'] == 'from_scratch':
@@ -151,21 +163,21 @@ def main():
         #latest_file = max(list_of_files, key=os.path.getctime)
         #latest_file = os.path.join('/scratch/dz1061/gcn/chemGraph/results',args.preTrainedData, args.model, args.gnn_type, 'preTraining', 'Exp_layer5_dim64', 'seed_31', 'best_model/', 'bestModel.pt')
         if args.model in ['1-GNN']:
-            latest_file = os.path.join('/scratch/dz1061/gcn/chemGraph/results',args.preTrainedData, '1-GNN', args.gnn_type, 'newData', 'Exp_layer12_dim256_decay', 'seed_1', 'best_model/', 'bestModel.pt')
+            latest_file = os.path.join('/scratch/dz1061/gcn/chemGraph/results',args.preTrainedData, '1-GNN', args.gnn_type, 'preTraining/all', 'Exp_layer5_dim256', 'seed_1', 'best_model/', 'bestModel.pt')
             model.from_pretrained(latest_file)
 
         if args.model == '1-2-GNN':
             #latest_file = os.path.join('/scratch/dz1061/gcn/chemGraph/results',args.preTrainedData, '1-2-GNN', args.gnn_type, 'preTraining', 'Exp_layer5_dim64', 'seed_31', 'best_model/', 'bestModel.pt')  #from sol_calc
-            #latest_file = os.path.join('/scratch/dz1061/gcn/chemGraph/results',args.preTrainedData, '1-2-GNN', args.gnn_type, 'newFinetuningFromsol_calc/ALL', 'Exp_layer5_dim64', 'seed_31', 'best_model/', 'bestModel.pt') # from finetuning on itself
+            latest_file = os.path.join('/scratch/dz1061/gcn/chemGraph/results',args.preTrainedData, '1-2-GNN', args.gnn_type, 'newFinetuningFromws', 'Exp_layer5_dim256_lr0.001_decay', 'seed_31', 'best_model/', 'bestModel.pt') # from finetuning on itself
             #latest_file = os.path.join('/scratch/dz1061/gcn/chemGraph/results',args.preTrainedData, '1-2-GNN', args.gnn_type, 'newData', 'Exp_layer5_dim64', 'seed_31', 'best_model/', 'bestModel.pt') # from train from scratch itself
-            latest_file = os.path.join('/scratch/dz1061/gcn/chemGraph/results',args.preTrainedData, '1-2-GNN', args.gnn_type, 'preTraining/all', 'Exp_layer5_dim256', 'seed_1', 'best_model/', 'bestModel.pt')
+            #latest_file = os.path.join('/scratch/dz1061/gcn/chemGraph/results',args.preTrainedData, '1-2-GNN', args.gnn_type, 'preTraining/all', 'Exp_layer5_dim256', 'seed_1', 'best_model/', 'bestModel.pt')
             #conv1_file = os.path.join('/scratch/dz1061/gcn/chemGraph/results',args.preTrainedData, '1-2-GNN', args.gnn_type, 'loopFinetuningFrompka', 'Exp_layer5_dim64', 'seed_31', 'best_model/', 'convISO1.pt')
             #conv2_file = os.path.join('/scratch/dz1061/gcn/chemGraph/results',args.preTrainedData, '1-2-GNN', args.gnn_type, 'loopFinetuningFrompka', 'Exp_layer5_dim64', 'seed_31', 'best_model/', 'convISO2.pt')
             model.from_pretrained(latest_file)
 
         if args.model in ['1-interaction-GNN']:
-            solute_latest_file = os.path.join('/scratch/dz1061/gcn/chemGraph/results', args.preTrainedData, '1-interaction-GNN', args.gnn_type, 'preTraining/all', 'Exp_layer5_dim64', 'seed_31', 'best_model/', 'bestModel_solute.pt')
-            solvent_latest_file = os.path.join('/scratch/dz1061/gcn/chemGraph/results', args.preTrainedData, '1-interaction-GNN', args.gnn_type, 'preTraining/all', 'Exp_layer5_dim64', 'seed_31', 'best_model/', 'bestModel_solvent.pt')
+            solute_latest_file = os.path.join('/scratch/dz1061/gcn/chemGraph/results', args.preTrainedData, '1-interaction-GNN', args.gnn_type, 'preTraining/all', 'Exp_layer5_dim128', 'seed_1', 'best_model/', 'bestModel_solute.pt')
+            solvent_latest_file = os.path.join('/scratch/dz1061/gcn/chemGraph/results', args.preTrainedData, '1-interaction-GNN', args.gnn_type, 'preTraining/all', 'Exp_layer5_dim128', 'seed_1', 'best_model/', 'bestModel_hydrated_solute.pt')
             model.from_pretrained(solute_latest_file, solvent_latest_file)
 
     if this_dic['train_type'] == 'transfer': # freeze encoder layers
@@ -197,7 +209,7 @@ def main():
     if this_dic['optimizer'] == 'swa':
         optimizer = torchcontrib.optim.SWA(optimizer)
     if this_dic['lr_style'] == 'decay':
-        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, factor=0.9, patience=5, min_lr=0.00001)
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, factor=0.7, patience=5, min_lr=0.00001)
 
     saveConfig(this_dic, name='config.json')
     best_val_error = float("inf")
@@ -208,7 +220,7 @@ def main():
          loss = train(model_, optimizer, train_loader, this_dic)
          time_toc = time.time()
 
-         if this_dic['dataset'] in ['mp', 'mp_drugs', 'xlogp3', 'calcSolLogP', 'sol_calc/ALL', 'solOct_calc/ALL', 'solWithWater_calc/ALL', 'qm9/nmr/carbon', 'qm9/nmr/hydrogen']:
+         if this_dic['dataset'] in ['mp', 'mp_drugs', 'xlogp3', 'calcLogP/ALL', 'sol_calc/ALL', 'solOct_calc/ALL', 'solWithWater_calc/ALL', 'solOctWithWater_calc/ALL', 'calcLogPWithWater/ALL', 'qm9/nmr/carbon', 'qm9/nmr/hydrogen']:
             train_error = loss
             #train_error = np.asscalar(loss.data.cpu().numpy()) # don't test the entire train set.
             #train_error = test(model_, loader.part_train_loader, this_dic)
@@ -228,6 +240,7 @@ def main():
                 val_error, test_error, param_norm(model_), grad_norm(model_)])
             saveToResultsFile(this_dic, saveContents[0], name='data.txt')
             best_val_error = saveModel(this_dic, epoch, model_, best_val_error, val_error)
+         torch.save(model.state_dict(), os.path.join(this_dic['running_path'], 'trained_model', 'model_last.pt'))
 
 if __name__ == "__main__":
     #cycle_index(10,2)
