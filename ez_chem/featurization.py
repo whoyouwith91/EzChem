@@ -48,6 +48,7 @@ allowable_features = {
         Chem.rdchem.BondDir.NONE,
         Chem.rdchem.BondDir.ENDUPRIGHT,
         Chem.rdchem.BondDir.ENDDOWNRIGHT,
+        Chem.rdchem.BondDir.EITHERDOUBLE
     ]
 }
 
@@ -176,13 +177,17 @@ class MolGraph:
         self.a2b = []  # mapping from atom index to incoming bond indices
         self.b2a = []  # mapping from bond index to the index of the atom the bond is coming from
         self.b2revb = []  # mapping from bond index to the index of the reverse bond
-
+        self.real_f_bonds = []
         # Get atom features
         self.f_atoms = [atom_features(atom) for atom in mol.GetAtoms()]
         if bfForModel == 'GCN':
            self.real_f_bonds = [bond_features(bond) for bond in mol.GetBonds()]
         if bfForModel in ['1-GNN', '1-2-GNN', '1-2-efgs-GNN', '1-efgs-GNN', '1-interaction-GNN']:
-           self.real_f_bonds = [bond_features_new(bond) for bond in mol.GetBonds()]
+           for bond in mol.GetBonds():
+               bf = bond_features_new(bond)
+               self.real_f_bonds.append(bf)
+               self.real_f_bonds.append(bf)
+           #self.real_f_bonds = [bond_features_new(bond) for bond in mol.GetBonds()]
         self.n_atoms = len(self.f_atoms)
 
         # Initialize atom to bond mapping for each atom
@@ -217,6 +222,8 @@ class MolGraph:
         self.at_end = []
         for bond in mol.GetBonds():
             self.at_begin.append(bond.GetBeginAtom().GetIdx())
+            self.at_begin.append(bond.GetEndAtom().GetIdx())
             self.at_end.append(bond.GetEndAtom().GetIdx())
+            self.at_end.append(bond.GetBeginAtom().GetIdx())
 
 

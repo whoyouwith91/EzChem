@@ -24,17 +24,12 @@ def get_model(config):
         return GNN_1_2(config)
     if name == '1-efgs-GNN':
         return GNN_1_EFGS(config)
-    if name == '1-interaction-GNN-naive':
-        return GNN_1_interaction_simpler(config)
     if name == '1-interaction-GNN':
-        if config['dataset'] in ['sol_exp', 'deepchem/freesol', 'attentiveFP/freesol', 'sol_calc/ALL', 'solOct_calc/ALL']:
-            return GNN_1_interaction(config)
-        if config['dataset'] in ['ws', 'deepchem/delaney']:
-            return GNN_1_interaction_solubility(config)
-        if config['dataset'] in ['logp', 'deepchem/logp']:
-            return GNN_1_interaction_logp(config)
-        if config['dataset'] in ['solWithWater', 'solWithWater_calc/ALL', 'logpWithWater']:
-            return GNN_1_WithWater(config)
+        if config['dataset'] in ['solWithWater', 'solWithWater_calc/ALL', 'logpWithWater', 'logpWithWater_calc/ALL']:
+            if config['interaction_simpler']:
+                return GNN_1_WithWater_simpler(config)
+            else:
+                return GNN_1_WithWater(config)
     if name == '1-2-GNN_dropout':
         return knn_dropout
     if name == '1-2-GNN_swag':
@@ -184,8 +179,19 @@ class GNN_1(torch.nn.Module):
                 self.pool = Set2Set((self.num_layer + 1) * self.emb_dim, set2set_iter)
             else:
                 self.pool = Set2Set(self.emb_dim, set2set_iter)
+        elif self.graph_pooling == 'conv':
+            self.pool = []
+            self.pool.append(global_add_pool)
+            self.pool.append(global_mean_pool)
+            self.pool.append(global_max_pool)
+            self.pool.append(GlobalAttention(gate_nn = torch.nn.Linear(self.emb_dim, 1)))
+            self.pool.append(Set2Set(self.emb_dim, 2))
+            self.convPool = nn.Conv1d(len(self.pool), 1, 2, stride=2)
+
         else:
             raise ValueError("Invalid graph pooling type.")
+
+        
 
         #For graph-level binary classification
         if self.graph_pooling[:-1][0] == "set2set":
@@ -195,6 +201,8 @@ class GNN_1(torch.nn.Module):
         
         if self.JK == "concat":
             L_in, L_out = self.mult * (self.num_layer + 1) * self.emb_dim, self.emb_dim
+        if self.graph_pooling == 'conv':
+            L_in = self.mult * self.emb_dim / 2, self.mult * self.emb_dim / 2
         else:
             L_in, L_out = self.mult * self.emb_dim, self.emb_dim
 
@@ -216,8 +224,12 @@ class GNN_1(torch.nn.Module):
         node_representation = self.gnn(x, edge_index, edge_attr)
 
         if self.propertyLevel == 'molecule':
-            if self.dataset in ['solWithWater']:
-                MolEmbed = node_representation[data.mask>0]
+            if self.graph_pooling == 'conv':
+                MolEmbed_list = []
+                for p in self.pool:
+                    MolEmbed_list.append(p(node_representation, batch))
+                MolEmbed_stack = torch.stack(MolEmbed_list, 1).squeeze()
+                MolEmbed = self.convPool(MolEmbed_stack).squeeze()
             else:
                 MolEmbed = self.pool(node_representation, batch)
         if self.propertyLevel == 'atom':
@@ -262,6 +274,7 @@ class GNN_1_2(torch.nn.Module):
         self.convISO2 = GraphConv(self.emb_dim, self.emb_dim)
 
         self.outLayers = nn.ModuleList()
+        self.out_batch_norms = torch.nn.ModuleList()
 
         #Different kind of graph pooling
         if self.graph_pooling == "sum":
@@ -297,10 +310,12 @@ class GNN_1_2(torch.nn.Module):
         #self.batch_norm = torch.nn.BatchNorm1d(L_in)
         fc = nn.Sequential(Linear(L_in, L_out), nn.ReLU())
         self.outLayers.append(fc)
+        self.out_batch_norms.append(torch.nn.BatchNorm1d(L_out))
         for _ in range(self.NumOutLayers):
             L_in, L_out = self.outLayers[-1][0].out_features, int(self.outLayers[-1][0].out_features / 2)
             fc = nn.Sequential(Linear(L_in, L_out), torch.nn.ReLU())
             self.outLayers.append(fc)
+            self.out_batch_norms.append(torch.nn.BatchNorm1d(L_out))
         last_fc = nn.Linear(L_out, self.num_tasks)
         self.outLayers.append(last_fc)
 
@@ -338,8 +353,10 @@ class GNN_1_2(torch.nn.Module):
         
         MolEmbed = torch.cat([x_1, x_2], dim=1)
         #MolEmbed = self.batch_norm(MolEmbed)
-        for layer in self.outLayers:
+        for layer, out_norm in zip(self.outLayers[:-1], self.out_batch_norms):
              MolEmbed = layer(MolEmbed)
+             MolEmbed = out_norm(MolEmbed)
+        MolEmbed = self.outLayers[-1](MolEmbed)
         
         if self.num_tasks > 1:
             return MolEmbed, None
@@ -458,626 +475,6 @@ class GNN_1_EFGS(torch.nn.Module):
         else:
             return MolEmbed.view(-1), None
 
-class GNN_1_interaction(torch.nn.Module):
-    """
-    Extension of GIN to incorporate edge information by concatenation.
-    Args:
-        num_layer (int): the number of GNN layers
-        emb_dim (int): dimensionality of embeddings
-        num_tasks (int): number of tasks in multi-task learning scenario
-        drop_ratio (float): dropout rate
-        JK (str): last, concat, max or sum.
-        graph_pooling (str): sum, mean, max, attention, set2set
-        gnn_type: gin, gcn, graphsage, gat
-
-    See https://arxiv.org/abs/1810.00826
-    JK-net: https://arxiv.org/abs/1806.03536
-    """
-    def __init__(self, config):
-        super(GNN_1_interaction, self).__init__()
-        self.num_layer = config['num_layer']
-        self.NumOutLayers = config['NumOutLayers']
-        self.JK = config['JK']
-        self.emb_dim = config['emb_dim']
-        self.num_i_2 = config['num_i_2']
-        self.num_tasks = config['num_tasks']
-        self.graph_pooling = config['pooling']
-        self.solvent = config['solvent']
-        self.interaction = config['interaction']
-        self.soluteSelf = config['soluteSelf']
-
-        self.gnn_solute = GNN(config)
-        if self.solvent == 'water':
-            self.gnn_solvent = nn.Sequential(nn.Linear(num_atom_features, self.emb_dim),torch.nn.ReLU(), \
-                                             nn.Linear(self.emb_dim, self.emb_dim))
-        else:
-            self.gnn_solvent = GNN(config)
-
-        self.imap = nn.Linear(2*self.emb_dim, 1)
-        self.outLayers = nn.ModuleList()
-        #Different kind of graph pooling
-        if self.graph_pooling == "sum":
-            self.pool = global_add_pool
-        elif self.graph_pooling == "mean":
-            self.pool = global_mean_pool
-        elif self.graph_pooling == "max":
-            self.pool = global_max_pool
-        elif self.graph_pooling == "attention":
-            if self.JK == "concat":
-                self.pool = GlobalAttention(gate_nn = torch.nn.Linear((self.num_layer + 1) * self.emb_dim, 1))
-            else:
-                self.pool = GlobalAttention(gate_nn = torch.nn.Linear(self.emb_dim, 1))
-        elif self.graph_pooling[:-1][0] == "set2set":
-            set2set_iter = int(self.graph_pooling[-1])
-            if self.JK == "concat":
-                self.pool = Set2Set((self.num_layer + 1) * self.emb_dim, set2set_iter)
-            else:
-                self.pool = Set2Set(2*self.emb_dim, set2set_iter)
-        else:
-            raise ValueError("Invalid graph pooling type.")
-
-        #For graph-level binary classification
-        if self.graph_pooling[:-1][0] == "set2set":
-            self.mult = 2
-        else:
-            self.mult = 1
-
-        if self.JK == "concat":
-            L_in, L_out = self.mult * (self.num_layer + 1) * self.emb_dim, self.emb_dim
-        else:
-            L_in, L_out = 4 * self.mult * self.emb_dim, self.emb_dim
-
-        fc = nn.Sequential(Linear(L_in, L_out), nn.ReLU())
-        self.outLayers.append(fc)
-        for _ in range(self.NumOutLayers):
-            L_in, L_out = self.outLayers[-1][0].out_features, int(self.outLayers[-1][0].out_features / 2)
-            fc = nn.Sequential(Linear(L_in, L_out), torch.nn.ReLU())
-            self.outLayers.append(fc)
-        last_fc = nn.Linear(L_out, self.num_tasks)
-        self.outLayers.append(last_fc)
-
-    def from_pretrained(self, model_file_solute, model_file_solvent):
-        #self.gnn = GNN(self.num_layer, self.emb_dim, JK = self.JK, drop_ratio = self.drop_ratio)
-        self.gnn_solute.load_state_dict(torch.load(model_file_solute))
-        self.gnn_solvent.load_state_dict(torch.load(model_file_solvent))
-
-
-    def forward(self, data):
-        solute_batch, solute_x, solute_edge_index, solute_edge_attr, solute_length_matrix, solvent_batch, solvent_x, solvent_length_matrix = \
-                data.batch, data.x, data.edge_index, data.edge_attr.long(), data.solute_length_matrix, \
-                data.solvent_batch, data.solvent_x, data.solvent_length_matrix
-        if self.solvent == 'octanol':
-            solvent_edge_index, solvent_edge_attr = data.solvent_edge_index, data.solvent_edge_attr.long()
-
-        solute_representation = self.gnn_solute(solute_x, solute_edge_index, solute_edge_attr) # 22 * 64
-        if self.solvent == 'water':
-            solvent_representation = self.gnn_solvent(solvent_x)
-        if self.solvent == 'octanol':
-            solvent_representation = self.gnn_solvent(solvent_x, solvent_edge_index, solvent_edge_attr) # 27 * 64
-        #MolEmbed = self.pool(node_representation, batch)
-
-        # Interaction
-        len_map = torch.mm(solute_length_matrix.t(), solvent_length_matrix)  # interaction map to control which solvent mols  22*27
-        #corresponds to which solute mol
-        if 'dot' not in self.interaction:
-            X1 = solute_representation.unsqueeze(0) # 1*22*64
-            Y1 = solvent_representation.unsqueeze(1) # 27*1*64
-            X2 = X1.repeat(solvent_representation.shape[0], 1, 1) # 27*22*64
-            Y2 = Y1.repeat(1, solute_representation.shape[0], 1) # 27*22*64
-            Z = torch.cat([X2, Y2], -1) # 27*22*128
-
-            if self.interaction == 'general':
-                interaction_map = self.imap(Z).squeeze(2) # 27*22
-            if self.interaction == 'tanh-general':
-                interaction_map = torch.tanh(self.imap(Z)).squeeze(2)
-
-            interaction_map = torch.mul(len_map.float(), interaction_map.t()) # 22*27
-            ret_interaction_map = torch.clone(interaction_map)
-
-        elif 'dot' in self.interaction:
-            interaction_map = torch.mm(solute_representation, solvent_representation.t()) # interaction coefficient 22 * 27
-            if 'scaled' in self.interaction:
-                interaction_map = interaction_map / (np.sqrt(self.emb_dim))
-
-            ret_interaction_map = torch.clone(interaction_map)
-            ret_interaction_map = torch.mul(len_map.float(), ret_interaction_map) # 22 * 27
-            interaction_map = torch.tanh(interaction_map) # 22*27
-            interaction_map = torch.mul(len_map.float(), interaction_map) # 22 * 27
-
-        solvent_prime = torch.mm(interaction_map.t(), solute_representation) # 27 * 64
-        solute_prime = torch.mm(interaction_map, solvent_representation) # 22 * 64
-
-        # Prediction
-        solute_representation = torch.cat((solute_representation, solute_prime), dim=1) # 22 * 128
-        solvent_representation = torch.cat((solvent_representation, solvent_prime), dim=1) # 27 * 128
-        #print(solute_representation.shape)
-        solute_representation = self.pool(solute_representation, solute_batch) # bs * 128
-        solvent_representation = self.pool(solvent_representation, solvent_batch) # bs * 128
-        #print(solute_representation.shape)
-        final_representation = torch.cat((solute_representation, solvent_representation), 1) # bs * 256
-
-        for layer in self.outLayers:
-             final_representation = layer(final_representation)
-        if self.num_tasks > 1:
-            return final_representation, ret_interaction_map
-        else:
-            return final_representation.view(-1), ret_interaction_map
-
-class GNN_1_interaction_simpler(torch.nn.Module):
-    """
-    Extension of GIN to incorporate edge information by concatenation.
-    Args:
-        num_layer (int): the number of GNN layers
-        emb_dim (int): dimensionality of embeddings
-        num_tasks (int): number of tasks in multi-task learning scenario
-        drop_ratio (float): dropout rate
-        JK (str): last, concat, max or sum.
-        graph_pooling (str): sum, mean, max, attention, set2set
-        gnn_type: gin, gcn, graphsage, gat
-
-    See https://arxiv.org/abs/1810.00826
-    JK-net: https://arxiv.org/abs/1806.03536
-    """
-    def __init__(self, config):
-        super(GNN_1_interaction_simpler, self).__init__()
-        self.num_layer = config['num_layer']
-        self.NumOutLayers = config['NumOutLayers']
-        self.drop_ratio = config['drop_ratio']
-        self.JK = config['JK']
-        self.emb_dim = config['emb_dim']
-        self.num_i_2 = config['num_i_2']
-        self.num_tasks = config['num_tasks']
-        self.graph_pooling = config['pooling']
-        self.gnn_type = config['gnn_type']
-        self.solvent = config['solvent']
-        self.interaction = config['interaction']
-        self.soluteSelf = config['soluteSelf']
-
-        self.gnn_solute = GNN(self.num_layer, self.emb_dim, self.JK, self.drop_ratio, self.gnn_type)
-        if self.solvent == 'water':
-            self.gnn_solvent = nn.Sequential(nn.Linear(num_atom_features, self.emb_dim),torch.nn.ReLU(), \
-                                             nn.Linear(self.emb_dim, self.emb_dim))
-        if self.solvent == 'octanol':
-            self.gnn_solvent = GNN(self.num_layer, self.emb_dim, self.JK, self.drop_ratio, self.gnn_type)
-        if self.solvent == 'watOct':
-            self.gnn_wat = nn.Sequential(nn.Linear(num_atom_features, self.emb_dim),torch.nn.ReLU(), \
-                                             nn.Linear(self.emb_dim, self.emb_dim))
-            self.gnn_oct = GNN(self.num_layer, self.emb_dim, self.JK, self.drop_ratio, self.gnn_type)
-
-        self.imap = nn.Linear(2*self.emb_dim, 1)
-        self.outLayers = nn.ModuleList()
-        #Different kind of graph pooling
-        if self.graph_pooling == "sum":
-            self.pool = global_add_pool
-        elif self.graph_pooling == "mean":
-            self.pool = global_mean_pool
-        elif self.graph_pooling == "max":
-            self.pool = global_max_pool
-        elif self.graph_pooling == "attention":
-            if self.JK == "concat":
-                self.pool = GlobalAttention(gate_nn = torch.nn.Linear((self.num_layer + 1) * self.emb_dim, 1))
-            else:
-                self.pool = GlobalAttention(gate_nn = torch.nn.Linear(self.emb_dim, 1))
-        elif self.graph_pooling[:-1][0] == "set2set":
-            set2set_iter = int(self.graph_pooling[-1])
-            if self.JK == "concat":
-                self.pool = Set2Set((self.num_layer + 1) * self.emb_dim, set2set_iter)
-            else:
-                self.pool = Set2Set(2*self.emb_dim, set2set_iter)
-        else:
-            raise ValueError("Invalid graph pooling type.")
-
-        #For graph-level binary classification
-        if self.graph_pooling[:-1][0] == "set2set":
-            self.mult = 2
-        else:
-            self.mult = 1
-
-        if self.JK == "concat":
-            L_in, L_out = self.mult * (self.num_layer + 1) * self.emb_dim, self.emb_dim
-        else:
-            if self.solvent in ['water', 'octanol']:
-                L_in, L_out = 2 * self.mult * self.emb_dim, self.emb_dim
-            if self.solvent == 'watOct':
-                L_in, L_out = 3 * self.mult * self.emb_dim, self.emb_dim
-
-        fc = nn.Sequential(Linear(L_in, L_out), nn.ReLU())
-        self.outLayers.append(fc)
-        for _ in range(self.NumOutLayers):
-            L_in, L_out = self.outLayers[-1][0].out_features, int(self.outLayers[-1][0].out_features / 2)
-            fc = nn.Sequential(Linear(L_in, L_out), torch.nn.ReLU())
-            self.outLayers.append(fc)
-        last_fc = nn.Linear(L_out, self.num_tasks)
-        self.outLayers.append(last_fc)
-
-    def from_pretrained(self, model_file_solute, model_file_solvent):
-        #self.gnn = GNN(self.num_layer, self.emb_dim, JK = self.JK, drop_ratio = self.drop_ratio)
-        self.gnn_solute.load_state_dict(torch.load(model_file_solute))
-        self.gnn_solvent.load_state_dict(torch.load(model_file_solvent))
-
-
-    def forward(self, data):
-        if self.config['dataset'] in ['ws', 'sol_exp', 'deepchem/freesol', 'deepchem/delaney', 'attentiveFP/freesol']:
-            solute_batch, solute_x, solute_edge_index, solute_edge_attr, solute_length_matrix, solvent_batch, solvent_x, solvent_length_matrix = \
-                data.batch, data.x, data.edge_index, data.edge_attr.long(), data.solute_length_matrix, \
-                data.solvent_batch, data.solvent_x, data.solvent_length_matrix
-        
-        if self.config['dataset'] in ['logp', 'deepchem/logp']:
-            solute_batch, solute_x, solute_edge_index, solute_edge_attr, solute_length_matrix, wat_batch, wat_x, wat_length_matrix, \
-            oct_batch, oct_x, oct_edge_index, oct_edge_attr, oct_length_matrix = \
-                data.batch, data.x, data.edge_index, data.edge_attr.long(), data.solute_length_matrix, \
-                data.wat_batch, data.wat_x, data.wat_length_matrix, data.oct_batch, data.oct_x, data.oct_edge_index, data.oct_edge_attr.long(), \
-                data.oct_length_matrix
-
-        if self.solvent == 'octanol':
-            solvent_edge_index, solvent_edge_attr = data.solvent_edge_index, data.solvent_edge_attr.long()
-
-        solute_representation = self.gnn_solute(solute_x, solute_edge_index, solute_edge_attr) # 22 * 64
-        if self.solvent == 'water':
-            solvent_representation = self.gnn_solvent(solvent_x)
-        if self.solvent == 'octanol':
-            solvent_representation = self.gnn_solvent(solvent_x, solvent_edge_index, solvent_edge_attr) # 27 * 64
-        if self.solvent == 'watOct':
-            wat_representation = self.gnn_wat(wat_x)
-            oct_representation = self.gnn_oct(oct_x, oct_edge_index, oct_edge_attr)
-
-        #MolEmbed = self.pool(node_representation, batch)
-
-        solute_representation = self.pool(solute_representation, solute_batch) # bs * 128
-        if self.solvent == 'water':
-            solvent_representation = self.gnn_solvent(solvent_x)
-        if self.solvent == 'octanol':
-            solvent_representation = self.gnn_solvent(solvent_x, solvent_edge_index, solvent_edge_attr)
-        if self.solvent == 'watOct':
-            wat_representation = self.pool(wat_representation, wat_batch) # bs * 128
-            oct_representation = self.pool(oct_representation, oct_batch) # bs * 128
-        
-        if self.solvent in ['water', 'octanol']:
-            final_representation = torch.cat((solute_representation, solvent_representation), 1) # bs * 256
-        if self.solvent == 'watOct':
-            final_representation = torch.cat((solute_representation, wat_representation, oct_representation), 1) # bs * 256
-
-        for layer in self.outLayers:
-             final_representation = layer(final_representation)
-        if self.num_tasks > 1:
-            return final_representation, None
-        else:
-            return final_representation.view(-1), None
-
-class GNN_1_interaction_solubility(torch.nn.Module):
-    """
-    Extension of GIN to incorporate edge information by concatenation.
-    Args:
-        num_layer (int): the number of GNN layers
-        emb_dim (int): dimensionality of embeddings
-        num_tasks (int): number of tasks in multi-task learning scenario
-        drop_ratio (float): dropout rate
-        JK (str): last, concat, max or sum.
-        graph_pooling (str): sum, mean, max, attention, set2set
-        gnn_type: gin, gcn, graphsage, gat
-
-    See https://arxiv.org/abs/1810.00826
-    JK-net: https://arxiv.org/abs/1806.03536
-    """
-    def __init__(self, config):
-        super(GNN_1_interaction_solubility, self).__init__()
-        self.num_layer = config['num_layer']
-        self.NumOutLayers = config['NumOutLayers']
-        self.drop_ratio = config['drop_ratio']
-        self.JK = config['JK']
-        self.emb_dim = config['emb_dim']
-        self.num_i_2 = config['num_i_2']
-        self.num_tasks = config['num_tasks']
-        self.graph_pooling = config['pooling']
-        self.gnn_type = config['gnn_type']
-        self.solvent = config['solvent']
-        self.interaction = config['interaction']
-        self.soluteSelf = config['soluteSelf']
-
-        self.gnn_solute = GNN(self.num_layer, self.emb_dim, self.JK, self.drop_ratio, self.gnn_type)
-        if self.soluteSelf:
-            self.gnn_solute_1 = GNN(self.num_layer, self.emb_dim, self.JK, self.drop_ratio, self.gnn_type)
-
-        if self.solvent == 'water':
-            self.gnn_solvent = nn.Sequential(nn.Linear(num_atom_features, self.emb_dim),torch.nn.ReLU(), \
-                                             nn.Linear(self.emb_dim, self.emb_dim))
-        else:
-            self.gnn_solvent = GNN(self.num_layer, self.emb_dim, self.JK, self.drop_ratio, self.gnn_type)
-
-        self.imap = nn.Linear(2*self.emb_dim, 1)
-        self.outLayers = nn.ModuleList()
-        #Different kind of graph pooling
-        if self.graph_pooling == "sum":
-            self.pool = global_add_pool
-        elif self.graph_pooling == "mean":
-            self.pool = global_mean_pool
-        elif self.graph_pooling == "max":
-            self.pool = global_max_pool
-        elif self.graph_pooling == "attention":
-            if self.JK == "concat":
-                self.pool = GlobalAttention(gate_nn = torch.nn.Linear((self.num_layer + 1) * self.emb_dim, 1))
-            else:
-                self.pool = GlobalAttention(gate_nn = torch.nn.Linear(self.emb_dim, 1))
-        elif self.graph_pooling[:-1][0] == "set2set":
-            set2set_iter = int(self.graph_pooling[-1])
-            if self.JK == "concat":
-                self.pool = Set2Set((self.num_layer + 1) * self.emb_dim, set2set_iter)
-            else:
-                self.pool = Set2Set(2*self.emb_dim, set2set_iter)
-        else:
-            raise ValueError("Invalid graph pooling type.")
-
-        #For graph-level binary classification
-        if self.graph_pooling[:-1][0] == "set2set":
-            self.mult = 2
-        else:
-            self.mult = 1
-
-        if self.JK == "concat":
-            L_in, L_out = self.mult * (self.num_layer + 1) * self.emb_dim, self.emb_dim
-        else:
-            L_in, L_out = 6 * self.mult * self.emb_dim, self.emb_dim
-
-        fc = nn.Sequential(Linear(L_in, L_out), nn.ReLU())
-        self.outLayers.append(fc)
-        for _ in range(self.NumOutLayers):
-            L_in, L_out = self.outLayers[-1][0].out_features, int(self.outLayers[-1][0].out_features / 2)
-            fc = nn.Sequential(Linear(L_in, L_out), torch.nn.ReLU())
-            self.outLayers.append(fc)
-        last_fc = nn.Linear(L_out, self.num_tasks)
-        self.outLayers.append(last_fc)
-
-    def from_pretrained(self, model_file_solute, model_file_solvent):
-        #self.gnn = GNN(self.num_layer, self.emb_dim, JK = self.JK, drop_ratio = self.drop_ratio)
-        self.gnn_solute.load_state_dict(torch.load(model_file_solute))
-        self.gnn_solvent.load_state_dict(torch.load(model_file_solvent))
-
-
-    def forward(self, data):
-        solute_batch, solute_x, solute_edge_index, solute_edge_attr, solute_length_matrix, solvent_batch, solvent_x, solvent_length_matrix = \
-                data.batch, data.x, data.edge_index, data.edge_attr.long(), data.solute_length_matrix, \
-                data.solvent_batch, data.solvent_x, data.solvent_length_matrix
-        if self.solvent == 'octanol':
-            solvent_edge_index, solvent_edge_attr = data.solvent_edge_index, data.solvent_edge_attr.long()
-
-        solute_representation = self.gnn_solute(solute_x, solute_edge_index, solute_edge_attr) # 22 * 64
-        if self.soluteSelf:
-            solute_representation_1 = self.gnn_solute_1(solute_x, solute_edge_index, solute_edge_attr)
-        if self.solvent == 'water':
-            solvent_representation = self.gnn_solvent(solvent_x)
-        if self.solvent == 'octanol':
-            solvent_representation = self.gnn_solvent(solvent_x, solvent_edge_index, solvent_edge_attr) # 27 * 64
-        #MolEmbed = self.pool(node_representation, batch)
-
-        # Interaction
-        len_map = torch.mm(solute_length_matrix.t(), solvent_length_matrix)  # interaction map to control which solvent mols  22*27
-        if self.soluteSelf:
-            len_map_solute = torch.mm(solute_length_matrix.t(), solute_length_matrix)  # interaction map to control which solvent mols  22*27
-        #corresponds to which solute mol
-        if 'dot' not in self.interaction:
-            X1 = solute_representation.unsqueeze(0) # 1*22*64
-            Y1 = solvent_representation.unsqueeze(1) # 27*1*64
-            X2 = X1.repeat(solvent_representation.shape[0], 1, 1) # 27*22*64
-            Y2 = Y1.repeat(1, solute_representation.shape[0], 1) # 27*22*64
-            Z = torch.cat([X2, Y2], -1) # 27*22*128
-
-            if self.interaction == 'general':
-                interaction_map = self.imap(Z).squeeze(2) # 27*22
-            if self.interaction == 'tanh-general':
-                interaction_map = torch.tanh(self.imap(Z)).squeeze(2)
-
-            interaction_map = torch.mul(len_map.float(), interaction_map.t()) # 22*27
-            ret_interaction_map = torch.clone(interaction_map)
-
-        elif 'dot' in self.interaction:
-            interaction_map = torch.mm(solute_representation, solvent_representation.t()) # interaction coefficient 22 * 27
-            if 'scaled' in self.interaction:
-                interaction_map = interaction_map / (np.sqrt(self.emb_dim))
-
-            ret_interaction_map = torch.clone(interaction_map)
-            ret_interaction_map = torch.mul(len_map.float(), ret_interaction_map) # 22 * 27
-            interaction_map = torch.tanh(interaction_map) # 22*27
-            interaction_map = torch.mul(len_map.float(), interaction_map) # 22 * 27
-
-            if self.soluteSelf:
-                interaction_map_solute = torch.mm(solute_representation, solute_representation_1.t()) # interaction coefficient 22 * 22
-                if 'scaled' in self.interaction:
-                    interaction_map_solute = interaction_map_solute / (np.sqrt(self.emb_dim))
-
-                #ret_interaction_map = torch.clone(interaction_map)
-                #ret_interaction_map = torch.mul(len_map_solute.float(), ret_interaction_map) # 22 * 27
-                interaction_map_solute = torch.tanh(interaction_map_solute) # 22*22
-                interaction_map_solute = torch.mul(len_map_solute.float(), interaction_map_solute) # 22 * 22
-
-
-        solvent_prime = torch.mm(interaction_map.t(), solute_representation) # 27 * 64
-        solute_prime = torch.mm(interaction_map, solvent_representation) # 22 * 64
-        if self.soluteSelf:
-            solute_solute_prime = torch.mm(interaction_map_solute, solute_representation_1) # 22 * 64
-
-        # Prediction
-        solute_representation_solvent = torch.cat((solute_representation, solute_prime), dim=1) # 22 * 128
-        solvent_representation = torch.cat((solvent_representation, solvent_prime), dim=1) # 27 * 128
-        if self.soluteSelf:
-            solute_solute_representation = torch.cat((solute_representation, solute_solute_prime), dim=1) # 22*128
-        #print(solute_representation.shape)
-        solute_representation = self.pool(solute_representation_solvent, solute_batch) # bs * 128
-        solvent_representation = self.pool(solvent_representation, solvent_batch) # bs * 128
-        if self.soluteSelf:
-            solute_solute_representation = scatter_mean(solute_solute_representation, solute_batch, dim=0) # bs * 128
-        #print(solute_representation.shape)
-        if not self.soluteSelf:
-            final_representation = torch.cat((solute_representation, solvent_representation), 1) # bs * 256
-        if self.soluteSelf:
-            final_representation = torch.cat((solute_solute_representation, solute_representation, solvent_representation), 1) # bs * 256
-            #print(final_representation.shape)
-
-        for layer in self.outLayers:
-             final_representation = layer(final_representation)
-        if self.num_tasks > 1:
-            return final_representation, ret_interaction_map
-        else:
-            return final_representation.view(-1), ret_interaction_map
-
-class GNN_1_interaction_logp(torch.nn.Module):
-    """
-    Extension of GIN to incorporate edge information by concatenation.
-    Args:
-        num_layer (int): the number of GNN layers
-        emb_dim (int): dimensionality of embeddings
-        num_tasks (int): number of tasks in multi-task learning scenario
-        drop_ratio (float): dropout rate
-        JK (str): last, concat, max or sum.
-        graph_pooling (str): sum, mean, max, attention, set2set
-        gnn_type: gin, gcn, graphsage, gat
-
-    See https://arxiv.org/abs/1810.00826
-    JK-net: https://arxiv.org/abs/1806.03536
-    """
-    def __init__(self, config):
-        super(GNN_1_interaction_logp, self).__init__()
-        self.num_layer = config['num_layer']
-        self.NumOutLayers = config['NumOutLayers']
-        self.drop_ratio = config['drop_ratio']
-        self.JK = config['JK']
-        self.emb_dim = config['emb_dim']
-        self.num_i_2 = config['num_i_2']
-        self.num_tasks = config['num_tasks']
-        self.graph_pooling = config['pooling']
-        self.gnn_type = config['gnn_type']
-        self.solvent = config['solvent']
-        self.interaction = config['interaction']
-        self.soluteSelf = config['soluteSelf']
-
-        if self.num_layer < 2:
-            raise ValueError("Number of GNN layers must be greater than 1.")
-
-        self.gnn_solute = GNN(self.num_layer, self.emb_dim, self.JK, self.drop_ratio, self.gnn_type)
-        if seflf.solvent == 'watOct':
-            self.gnn_wat = nn.Sequential(nn.Linear(num_atom_features, self.emb_dim),torch.nn.ReLU(), \
-                                             nn.Linear(self.emb_dim, self.emb_dim))
-            self.gnn_oct = GNN(self.num_layer, self.emb_dim, self.JK, self.drop_ratio, self.gnn_type)
-
-        self.imap = nn.Linear(2*self.emb_dim, 1)
-        self.outLayers = nn.ModuleList()
-        #Different kind of graph pooling
-        if self.graph_pooling == "sum":
-            self.pool = global_add_pool
-        elif self.graph_pooling == "mean":
-            self.pool = global_mean_pool
-        elif self.graph_pooling == "max":
-            self.pool = global_max_pool
-        elif self.graph_pooling == "attention":
-            if self.JK == "concat":
-                self.pool = GlobalAttention(gate_nn = torch.nn.Linear((self.num_layer + 1) * self.emb_dim, 1))
-            else:
-                self.pool = GlobalAttention(gate_nn = torch.nn.Linear(self.emb_dim, 1))
-        elif self.graph_pooling[:-1][0] == "set2set":
-            set2set_iter = int(self.graph_pooling[-1])
-            if self.JK == "concat":
-                self.pool = Set2Set((self.num_layer + 1) * self.emb_dim, set2set_iter)
-            else:
-                self.pool = Set2Set(2*self.emb_dim, set2set_iter)
-        else:
-            raise ValueError("Invalid graph pooling type.")
-
-        #For graph-level binary classification
-        if self.graph_pooling[:-1][0] == "set2set":
-            self.mult = 2
-        else:
-            self.mult = 1
-
-        if self.JK == "concat":
-            L_in, L_out = self.mult * (self.num_layer + 1) * self.emb_dim, self.emb_dim
-        else:
-            L_in, L_out = 8 * self.mult * self.emb_dim, self.emb_dim
-
-        fc = nn.Sequential(Linear(L_in, L_out), nn.ReLU())
-        self.outLayers.append(fc)
-        for _ in range(self.NumOutLayers):
-            L_in, L_out = self.outLayers[-1][0].out_features, int(self.outLayers[-1][0].out_features / 2)
-            fc = nn.Sequential(Linear(L_in, L_out), torch.nn.ReLU())
-            self.outLayers.append(fc)
-        last_fc = nn.Linear(L_out, self.num_tasks)
-        self.outLayers.append(last_fc)
-
-    def from_pretrained(self, model_file_solute, model_file_solvent):
-        #self.gnn = GNN(self.num_layer, self.emb_dim, JK = self.JK, drop_ratio = self.drop_ratio)
-        self.gnn_solute.load_state_dict(torch.load(model_file_solute))
-        self.gnn_solvent.load_state_dict(torch.load(model_file_solvent))
-
-
-    def forward(self, data):
-        solute_batch, solute_x, solute_edge_index, solute_edge_attr, solute_length_matrix, wat_batch, wat_x, wat_length_matrix, \
-            oct_batch, oct_x, oct_edge_index, oct_edge_attr, oct_length_matrix = \
-                data.batch, data.x, data.edge_index, data.edge_attr.long(), data.solute_length_matrix, \
-                data.wat_batch, data.wat_x, data.wat_length_matrix, data.oct_batch, data.oct_x, data.oct_edge_index, data.oct_edge_attr.long(), \
-                data.oct_length_matrix
-
-        solute_representation = self.gnn_solute(solute_x, solute_edge_index, solute_edge_attr) # 22 * 64
-        if self.solvent == 'watOct':
-            wat_representation = self.gnn_wat(wat_x)
-            oct_representation = self.gnn_oct(oct_x, oct_edge_index, oct_edge_attr) # 27 * 64
-        #MolEmbed = self.pool(node_representation, batch)
-
-        # Interaction
-        len_map_wat = torch.mm(solute_length_matrix.t(), wat_length_matrix)  # interaction map to control which solvent mols  22*27
-        len_map_oct = torch.mm(solute_length_matrix.t(), oct_length_matrix)
-
-        if 'dot' not in self.interaction:
-            X1 = solute_representation.unsqueeze(0) # 1*22*64
-            Y1 = solvent_representation.unsqueeze(1) # 27*1*64
-            X2 = X1.repeat(solvent_representation.shape[0], 1, 1) # 27*22*64
-            Y2 = Y1.repeat(1, solute_representation.shape[0], 1) # 27*22*64
-            Z = torch.cat([X2, Y2], -1) # 27*22*128
-
-            if self.interaction == 'general':
-                interaction_map = self.imap(Z).squeeze(2) # 27*22
-            if self.interaction == 'tanh-general':
-                interaction_map = torch.tanh(self.imap(Z)).squeeze(2)
-
-            interaction_map = torch.mul(len_map.float(), interaction_map.t()) # 22*27
-            ret_interaction_map = torch.clone(interaction_map)
-
-        elif 'dot' in self.interaction:
-            interaction_map_wat = torch.mm(solute_representation, wat_representation.t()) # interaction coefficient 22 * 27
-            interaction_map_oct = torch.mm(solute_representation, oct_representation.t()) # interaction coefficient 22 * 27
-            if 'scaled' in self.interaction:
-                interaction_map_wat = interaction_map_wat / (np.sqrt(self.emb_dim))
-                interaction_map_oct = interaction_map_oct / (np.sqrt(self.emb_dim))
-
-            ret_interaction_map_wat = torch.clone(interaction_map_wat)
-            ret_interaction_map_oct = torch.clone(interaction_map_oct)
-            ret_interaction_map_wat = torch.mul(len_map_wat.float(), ret_interaction_map_wat) # 22 * 27
-            ret_interaction_map_oct = torch.mul(len_map_oct.float(), ret_interaction_map_oct) # 22 * 27
-            interaction_map_wat = torch.tanh(interaction_map_wat) # 22*27
-            interaction_map_oct = torch.tanh(interaction_map_oct) # 22*27
-            interaction_map_wat = torch.mul(len_map_wat.float(), interaction_map_wat) # 22 * 27
-            interaction_map_oct = torch.mul(len_map_oct.float(), interaction_map_oct) # 22 * 27
-
-        wat_prime = torch.mm(interaction_map_wat.t(), solute_representation) # 27 * 64
-        oct_prime = torch.mm(interaction_map_oct.t(), solute_representation) # 27 * 64
-        solute_prime_wat = torch.mm(interaction_map_wat, wat_representation) # 22 * 64
-        solute_prime_oct = torch.mm(interaction_map_oct, oct_representation) # 22 * 64
-
-        # Prediction
-        solute_representation_wat = torch.cat((solute_representation, solute_prime_wat), dim=1) # 22 * 128
-        solute_representation_oct = torch.cat((solute_representation, solute_prime_oct), dim=1) # 22 * 128
-        wat_representation = torch.cat((wat_representation, wat_prime), dim=1) # 27 * 128
-        oct_representation = torch.cat((oct_representation, oct_prime), dim=1) # 27 * 128
-        #print(solute_representation.shape)
-        solute_representation_wat = self.pool(solute_representation_wat, solute_batch) # bs * 128
-        solute_representation_oct = self.pool(solute_representation_oct, solute_batch) # bs * 128
-        wat_representation = self.pool(wat_representation, wat_batch) # bs * 128
-        oct_representation = self.pool(oct_representation, oct_batch) # bs * 128
-        
-        final_representation = torch.cat((solute_representation_wat, solute_representation_oct, wat_representation, oct_representation), 1) # bs * 512
-        for layer in self.outLayers:
-             final_representation = layer(final_representation)
-        if self.num_tasks > 1:
-            return final_representation, ret_interaction_map
-        else:
-            return final_representation.view(-1), (ret_interaction_map_wat, ret_interaction_map_oct) 
 
 class GNN_1_WithWater(torch.nn.Module):
     """
@@ -1176,6 +573,107 @@ class GNN_1_WithWater(torch.nn.Module):
         else:
             return final_representation.view(-1), None
 
+class GNN_1_WithWater_simpler(torch.nn.Module):
+    """
+    Extension of GIN to incorporate edge information by concatenation.
+    Args:
+        num_layer (int): the number of GNN layers
+        emb_dim (int): dimensionality of embeddings
+        num_tasks (int): number of tasks in multi-task learning scenario
+        drop_ratio (float): dropout rate
+        JK (str): last, concat, max or sum.
+        graph_pooling (str): sum, mean, max, attention, set2set
+        gnn_type: gin, gcn, graphsage, gat
+    See https://arxiv.org/abs/1810.00826
+    JK-net: https://arxiv.org/abs/1806.03536
+    """
+    def __init__(self, config):
+        super(GNN_1_WithWater_simpler, self).__init__()
+        self.num_layer = config['num_layer']
+        self.NumOutLayers = config['NumOutLayers']
+        self.JK = config['JK']
+        self.emb_dim = config['emb_dim']
+        self.num_tasks = config['num_tasks']
+        self.graph_pooling = config['pooling']
+        self.dataset = config['dataset']
+        self.gnn_solute = GNN(config)
+        self.gnn_hydrated_solute = GNN(config)
+
+        self.outLayers = nn.ModuleList()
+        #Different kind of graph pooling
+        if self.graph_pooling == "sum":
+            self.pool = global_add_pool
+        elif self.graph_pooling == "mean":
+            self.pool = global_mean_pool
+        elif self.graph_pooling == "max":
+            self.pool = global_max_pool
+        elif self.graph_pooling == "attention":
+            if self.JK == "concat":
+                self.pool = GlobalAttention(gate_nn = torch.nn.Linear((self.num_layer + 1) * self.emb_dim, 1))
+            else:
+                self.pool = GlobalAttention(gate_nn = torch.nn.Linear(self.emb_dim, 1))
+        elif self.graph_pooling[:-1][0] == "set2set":
+            set2set_iter = int(self.graph_pooling[-1])
+            if self.JK == "concat":
+                self.pool = Set2Set((self.num_layer + 1) * self.emb_dim, set2set_iter)
+            else:
+                self.pool = Set2Set(2*self.emb_dim, set2set_iter)
+        else:
+            raise ValueError("Invalid graph pooling type.")
+
+        #For graph-level binary classification
+        if self.graph_pooling[:-1][0] == "set2set":
+            self.mult = 2
+        else:
+            self.mult = 1
+        
+        if self.dataset in ['logpWithWater']:
+            self.mult = self.mult * 2
+
+        if self.JK == "concat":
+            L_in, L_out = self.mult * (self.num_layer + 1) * self.emb_dim, self.emb_dim
+        else:
+            L_in, L_out = 2 * self.mult * self.emb_dim, self.emb_dim
+
+        fc = nn.Sequential(Linear(L_in, L_out), nn.ReLU())
+        self.outLayers.append(fc)
+        for _ in range(self.NumOutLayers):
+            L_in, L_out = self.outLayers[-1][0].out_features, int(self.outLayers[-1][0].out_features / 2)
+            fc = nn.Sequential(Linear(L_in, L_out), torch.nn.ReLU())
+            self.outLayers.append(fc)
+        last_fc = nn.Linear(L_out, self.num_tasks)
+        self.outLayers.append(last_fc)
+
+    def from_pretrained(self, model_file_solute, model_file_solvent):
+        #self.gnn = GNN(self.num_layer, self.emb_dim, JK = self.JK, drop_ratio = self.drop_ratio)
+        self.gnn_solute.load_state_dict(torch.load(model_file_solute))
+        self.gnn_hydrated_solute.load_state_dict(torch.load(model_file_solvent))
+
+
+    def forward(self, data):
+        solute_x, solute_edge_index, solute_edge_attr, batch = data.x, data.edge_index, data.edge_attr.long(), data.batch
+        hyd_solute_x, hyd_solute_edge_index, hyd_solute_edge_attr, hyd_solute_batch, mask = data.hyd_solute_x, data.hyd_solute_edge_index, data.hyd_solute_edge_attr.long(), \
+            data.hyd_solute_batch, data.hyd_solute_mask
+
+        solute_node_representation = self.gnn_solute(solute_x, solute_edge_index, solute_edge_attr) # 22 * 64
+        hydrated_solute_node_representation = self.gnn_hydrated_solute(hyd_solute_x, hyd_solute_edge_index, hyd_solute_edge_attr) # 22 * 64
+
+        solute_representation = self.pool(solute_node_representation, batch)
+        if self.dataset in ['logpWithWater']:
+            solute_representation = self.pool(solute_node_representation[mask<1], batch[mask<1])
+        hydrated_solute_representation = self.pool(hydrated_solute_node_representation[mask<1], hyd_solute_batch[mask<1])
+        
+        if self.dataset in ['logpWithWater']:
+            final_representation = torch.cat([solute_representation, hydrated_solute_representation], dim=1)
+        else:
+            final_representation = hydrated_solute_representation
+
+        for layer in self.outLayers:
+             final_representation = layer(final_representation)
+        if self.num_tasks > 1:
+            return final_representation, None
+        else:
+            return final_representation.view(-1), None
 
 if __name__ == "__main__":
     pass
