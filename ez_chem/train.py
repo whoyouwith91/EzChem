@@ -47,6 +47,7 @@ def main():
     parser.add_argument('--resLayer', type=int, default=-1)
     parser.add_argument('--solvent', type=str, default="")
     parser.add_argument('--interaction', type=str, default="")
+    parser.add_argument('--interaction_simpler', action='store_true')
     parser.add_argument('--pooling', type=str, default='sum')
     parser.add_argument('--aggregate', type=str, default='add')
     parser.add_argument('--degree', type=int, default=0)
@@ -54,6 +55,7 @@ def main():
     parser.add_argument('--JK', type=str, default="last",
                         help='how the node features are combined across layers. last, sum, max or concat')
     parser.add_argument('--train_type', type=str, default='from_scratch', choices=['from_scratch', 'transfer', 'hpsearch', 'finetuning'])
+    parser.add_argument('--OnlyPrediction', action='store_true')
     parser.add_argument('--loss', type=str, choices=['l1', 'l2', 'smooth_l1', 'dropout', 'vae', 'unsuper', 'maskedL2'])
     parser.add_argument('--metrics', type=str, choices=['l1', 'l2'])
     parser.add_argument('--weights', type=str, choices=['he_norm', 'xavier_norm', 'he_uni', 'xavier_uni'], default='he_uni')
@@ -98,7 +100,7 @@ def main():
     if not os.path.exists(os.path.join(args.running_path, 'best_model/')):
         os.makedirs(os.path.join(args.running_path, 'best_model/'))
 
-    if args.dataset == 'calcSolLogP':
+    if args.dataset == 'calcSolLogP/ALL':
        this_dic['taskType'] = 'multi'
        args.num_tasks = 3
     elif args.dataset == 'commonProperties':
@@ -113,7 +115,7 @@ def main():
         dataSizes = json.load(f)
     #this_dic['train_size'] = int(dataSizes[args.dataset]['train_size'])
     #this_dic['val_size'] = int(dataSizes[args.dataset]['val_size'])
-    if args.dataset in ['sol_calc/ALL', 'solOct_calc/ALL', 'logp_calc/ALL', 'calcSolLogP', 'xlogp3', 'solWithWater_calc/ALL'] and args.style == 'preTraining':
+    if args.dataset in ['sol_calc/ALL', 'solOct_calc/ALL', 'calcLogP/ALL', 'calcLogPWithWater/ALL', 'calcSolLogP/ALL', 'xlogp3', 'solWithWater_calc/ALL'] and args.style == 'preTraining':
         this_dic['train_size'] = int(dataSizes[args.dataset+'/COMPLETE']['train_size'])
         this_dic['val_size'] = int(dataSizes[args.dataset+'/COMPLETE']['val_size'])
     else:
@@ -170,7 +172,7 @@ def main():
             #latest_file = os.path.join('/scratch/dz1061/gcn/chemGraph/results',args.preTrainedData, '1-2-GNN', args.gnn_type, 'preTraining', 'Exp_layer5_dim64', 'seed_31', 'best_model/', 'bestModel.pt')  #from sol_calc
             latest_file = os.path.join('/scratch/dz1061/gcn/chemGraph/results',args.preTrainedData, '1-2-GNN', args.gnn_type, 'newFinetuningFromws', 'Exp_layer5_dim256_lr0.001_decay', 'seed_31', 'best_model/', 'bestModel.pt') # from finetuning on itself
             #latest_file = os.path.join('/scratch/dz1061/gcn/chemGraph/results',args.preTrainedData, '1-2-GNN', args.gnn_type, 'newData', 'Exp_layer5_dim64', 'seed_31', 'best_model/', 'bestModel.pt') # from train from scratch itself
-            #latest_file = os.path.join('/scratch/dz1061/gcn/chemGraph/results',args.preTrainedData, '1-2-GNN', args.gnn_type, 'preTraining/all', 'Exp_layer5_dim256', 'seed_1', 'best_model/', 'bestModel.pt')
+            #latest_file = os.path.join('/scratch/dz1061/gcn/chemGraph/results',args.preTrainedData, '1-2-GNN', args.gnn_type, 'preTraining/all', 'Exp_layer5_dim256', 'seed_31', 'best_model/', 'model_bestEpoch.pt')
             #conv1_file = os.path.join('/scratch/dz1061/gcn/chemGraph/results',args.preTrainedData, '1-2-GNN', args.gnn_type, 'loopFinetuningFrompka', 'Exp_layer5_dim64', 'seed_31', 'best_model/', 'convISO1.pt')
             #conv2_file = os.path.join('/scratch/dz1061/gcn/chemGraph/results',args.preTrainedData, '1-2-GNN', args.gnn_type, 'loopFinetuningFrompka', 'Exp_layer5_dim64', 'seed_31', 'best_model/', 'convISO2.pt')
             model.from_pretrained(latest_file)
@@ -209,21 +211,26 @@ def main():
     if this_dic['optimizer'] == 'swa':
         optimizer = torchcontrib.optim.SWA(optimizer)
     if this_dic['lr_style'] == 'decay':
-        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, factor=0.7, patience=5, min_lr=0.00001)
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, factor=0.9, patience=5, min_lr=0.00001)
 
     saveConfig(this_dic, name='config.json')
     best_val_error = float("inf")
+    
+    if args.OnlyPrediction:
+        this_dic['epochs'] = 1
+        model_.eval()
     for epoch in range(1, this_dic['epochs']+1):
          saveContents = []
          time_tic = time.time()
          #lr = scheduler.optimizer.param_groups[0]['lr']
-         loss = train(model_, optimizer, train_loader, this_dic)
+         if not args.OnlyPrediction:
+             loss = train(model_, optimizer, train_loader, this_dic)
+         else:
+             loss = 0.
          time_toc = time.time()
 
-         if this_dic['dataset'] in ['mp', 'mp_drugs', 'xlogp3', 'calcLogP/ALL', 'sol_calc/ALL', 'solOct_calc/ALL', 'solWithWater_calc/ALL', 'solOctWithWater_calc/ALL', 'calcLogPWithWater/ALL', 'qm9/nmr/carbon', 'qm9/nmr/hydrogen']:
+         if this_dic['dataset'] in ['mp', 'mp_drugs', 'xlogp3', 'calcLogP/ALL', 'sol_calc/ALL', 'solOct_calc/ALL', 'solWithWater_calc/ALL', 'solOctWithWater_calc/ALL', 'calcLogPWithWater/ALL', 'qm9/nmr/carbon', 'qm9/nmr/hydrogen', 'qm9/nmr/allAtoms', 'calcSolLogP/ALL']:
             train_error = loss
-            #train_error = np.asscalar(loss.data.cpu().numpy()) # don't test the entire train set.
-            #train_error = test(model_, loader.part_train_loader, this_dic)
          else:
             train_error = test(model_, train_loader, this_dic)
          val_error = test(model_, val_loader, this_dic)
