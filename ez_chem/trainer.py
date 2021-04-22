@@ -98,8 +98,9 @@ def train(model, optimizer, dataloader, config):
         if config['taskType'] == 'single' and config['propertyLevel'] == 'molecule':
             loss = get_loss_fn(config['loss'])(y0, data.y)
             all_loss += loss.item() * data.num_graphs
-        if config['taskType'] == 'multi' and config['dataset'] == 'calcSolLogP':
+        if config['taskType'] == 'multi' and config['dataset'] == 'calcSolLogP/ALL':
             loss = get_loss_fn(config['loss'])(y0[:,0], data.y) + get_loss_fn(config['loss'])(y0[:,1], data.y1) + get_loss_fn(config['loss'])(y0[:,2], data.y2)
+            all_loss += loss.item() * data.num_graphs
         if config['dataset'] == 'commonProperties':
             loss = get_loss_fn(config['loss'])(y0[:,0], data.y) + get_loss_fn(config['loss'])(y0[:,1], data.y1) + get_loss_fn(config['loss'])(y0[:,2], data.y2) + get_loss_fn(config['loss'])(y0[:,3], data.y3)
             all_loss += loss.item() * data.num_graphs
@@ -145,31 +146,23 @@ def test(model, dataloader, config):
                 data.y = torch.FloatTensor(y).to(config['device'])
                 data.y = data.y.view(-1)
                 data.num_graphs = bs
-            if config['dataset'] in ['qm9']:
-                error_name = 'l1'
-                error += get_metrics_fn(error_name)(model(data)[0], data.y).item() * data.num_graphs
             else:
                 if config['taskType'] == 'single' and config['propertyLevel'] == 'molecule':
                     error += get_metrics_fn(config['metrics'])(model(data)[0], data.y) * data.num_graphs
-                if config['taskType'] == 'multi' and config['dataset'] == 'calcSolLogP':
+                if config['taskType'] == 'multi' and config['dataset'] == 'calcSolLogP/ALL':
                     y0, _ = model(data)
-                    error += (get_loss_fn(config['loss'])(y0[:,0], data.y) + get_loss_fn(config['loss'])(y0[:,1], data.y1) + get_loss_fn(config['loss'])(y0[:,2], data.y2))*data.num_graphs
+                    #error += (get_metrics_fn(config['loss'])(y0[:,0], data.y) + get_metrics_fn(config['loss'])(y0[:,1], data.y1) + get_metrics_fn(config['loss'])(y0[:,2], data.y2))*data.num_graphs
+                    error += get_metrics_fn(config['metrics'])(y0[:,0], data.y)*data.num_graphs
                 if config['taskType'] == 'multi' and config['dataset'] == 'commonProperties':
                     y0, _ = model(data)
-                    error += (get_loss_fn(config['loss'])(y0[:,0], data.y) + get_loss_fn(config['loss'])(y0[:,1], data.y1) + get_loss_fn(config['loss'])(y0[:,2], data.y2) + get_loss_fn(config['loss'])(y0[:,3], data.y3))*data.num_graphs
+                    error += (get_metrics_fn(config['metrics'])(y0[:,0], data.y) + get_loss_fn(config['metrics'])(y0[:,1], data.y1) + get_loss_fn(config['metrics'])(y0[:,2], data.y2) + get_loss_fn(config['metrics'])(y0[:,3], data.y3))*data.num_graphs
                 if config['propertyLevel'] == 'atom':
-                    #print(data.mask)
-                    #sys.stdout.flush()
-                    #print(data.y)
-                    #sys.stdout.flush()
                     total_N += data.mask.sum().item()
                     error += get_metrics_fn(config['metrics'])(model(data)[0][data.mask>0].reshape(-1,1), data.y[data.mask>0].reshape(-1,1))*data.mask.sum().item()
                     #error += MAE_loss(model(data)[0], data.y, data.mask)
-       if config['dataset'] in ['qm9']:
-           return error / len(dataloader.dataset) # MAE
-       elif config['propertyLevel'] == 'atom' and config['dataset'] in ['nmr/hydrogen', 'nmr/carbon']:
-           #print(error.item(), total_N.item())
-           #sys.stdout.flush()
+       if config['dataset'] in ['qm9/u0']:
+           return error.item() / len(dataloader.dataset) # MAE
+       elif config['propertyLevel'] == 'atom' and config['dataset'] in ['nmr/hydrogen', 'nmr/carbon', 'qm9/nmr/carbon', 'qm9/nmr/hydrogen', 'qm9/nmr/allAtoms', 'qm9/nmr/carbon/smaller']:
            return error.item() / total_N # MAE
        else:
            if config['taskType'] == 'single':
