@@ -115,13 +115,6 @@ def main():
     train_loader, val_loader, test_loader, std, num_features, num_bond_features, num_i_2 = loader.train_loader, loader.val_loader, loader.test_loader, loader.std, loader.num_features, loader.num_bond_features, loader.num_i_2
     this_dic['num_features'], this_dic['num_bond_features'], this_dic['num_i_2'], this_dic['std'] = int(num_features), num_bond_features, num_i_2, std
     this_dic['train_size'], this_dic['val_size'], this_dic['test_size'] = len(train_loader.dataset), len(val_loader.dataset), len(test_loader.dataset)
-    
-    #if args.gnn_type == 'pnaconv':
-    #    deg = torch.zeros(7, dtype=torch.long)
-    #    for data in train_loader:
-    #        d = degree(data.edge_index[1], num_nodes=data.num_nodes, dtype=torch.long)
-    #        deg += torch.bincount(d, minlength=deg.numel())
-    #    this_dic['degree'] = deg
 
     # for special cases 
     if args.EFGS:
