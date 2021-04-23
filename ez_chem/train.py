@@ -188,7 +188,7 @@ def main():
             scheduler.step(val_error)
 
         if not this_dic['uncertainty']:
-            saveContents.append([model_, epoch, time_toc, time_tic, train_error,  \
+            saveContents.append([epoch, lr, time_toc-time_tic, train_error,  \
                 val_error, test_error, param_norm(model_), grad_norm(model_)])
             saveToResultsFile(this_dic, saveContents[0], name='data.txt')
             best_val_error = saveModel(this_dic, epoch, model_, best_val_error, val_error) # save model if validation error hits new lower 
