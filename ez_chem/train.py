@@ -38,14 +38,12 @@ def main():
     parser.add_argument('--dataset', type=str, default = 'zinc_standard_agent', help='root directory of dataset for pretraining')
     parser.add_argument('--normalize', action='store_true')  # on target data
     parser.add_argument('--drop_ratio', type=float, default=0.0) 
-    parser.add_argument('--output_model_file', type=str, default = '', help='filename to output the model')
     parser.add_argument('--seed', type=int, default=0, help = "Seed for splitting dataset.")
     parser.add_argument('--num_workers', type=int, default = 8, help='number of workers for dataset loading')
     parser.add_argument('--model', type=str, default="1-GNN")
     parser.add_argument('--EFGS', action='store_true')
     parser.add_argument('--residual_connect', action='store_true')
     parser.add_argument('--resLayer', type=int, default=-1)
-    parser.add_argument('--solvent', type=str, default="")
     parser.add_argument('--interaction', type=str, default="")
     parser.add_argument('--interaction_simpler', action='store_true')
     parser.add_argument('--pooling', type=str, default='sum')
@@ -55,6 +53,7 @@ def main():
     parser.add_argument('--JK', type=str, default="last",
                         help='how the node features are combined across layers. last, sum, max or concat')
     parser.add_argument('--train_type', type=str, default='from_scratch', choices=['from_scratch', 'transfer', 'hpsearch', 'finetuning'])
+    parser.add_argument('--preTrainedPath', type=str)
     parser.add_argument('--OnlyPrediction', action='store_true')
     parser.add_argument('--loss', type=str, choices=['l1', 'l2', 'smooth_l1', 'dropout', 'vae', 'unsuper', 'maskedL2'])
     parser.add_argument('--metrics', type=str, choices=['l1', 'l2'])
@@ -73,6 +72,7 @@ def main():
     parser.add_argument('--preTrainedData', type=str)
     args = parser.parse_args()
 
+    # define seeds for training 
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
     device = torch.device("cuda:" + str(args.device)) if torch.cuda.is_available() else torch.device("cpu")
@@ -80,108 +80,62 @@ def main():
         torch.cuda.manual_seed_all(0)
 
     this_dic = vars(args)
-    
-    if args.style == 'base': 
-        this_dic['data_path'] = os.path.join(args.allDataPath, args.dataset, 'graphs', args.style, args.model)
-    if args.style == 'CV':
-        this_dic['data_path'] = os.path.join(args.allDataPath, args.dataset, 'graphs', args.style, args.model, 'cv_'+str(this_dic['cv_folder'])) 
-    this_dic['running_path'] = os.path.join(args.running_path, args.dataset, args.model, args.gnn_type, args.experiment)
-    if args.style == 'preTraining':
-        this_dic['data_path'] = os.path.join(args.allDataPath, args.dataset, 'graphs/base', 'COMPLETE', args.model)
-    if args.solvent:
-        if args.style == 'preTraining':
-            this_dic['data_path'] = os.path.join(args.allDataPath, args.dataset, 'graphs/base', 'COMPLETE', args.model, args.solvent)
-        else:
-            this_dic['data_path'] = os.path.join(args.allDataPath, args.dataset, 'graphs/base', args.model, args.solvent)
-        assert this_dic['interaction']
-    
+    # define a path to save training results: save models and data
+    this_dic['running_path'] = os.path.join(args.running_path, args.dataset, args.model, args.gnn_type, args.experiment) 
     if not os.path.exists(os.path.join(args.running_path, 'trained_model/')):
         os.makedirs(os.path.join(args.running_path, 'trained_model/'))
     if not os.path.exists(os.path.join(args.running_path, 'best_model/')):
         os.makedirs(os.path.join(args.running_path, 'best_model/'))
+    createResultsFile(this_dic, name='data.txt')
 
+    # define path to load data for different training tasks
+    if args.style == 'base': 
+        this_dic['data_path'] = os.path.join(args.allDataPath, args.dataset, 'graphs', args.style, args.model)
+    if args.style == 'CV':
+        this_dic['data_path'] = os.path.join(args.allDataPath, args.dataset, 'graphs', args.style, args.model, 'cv_'+str(this_dic['cv_folder'])) 
+    if args.style == 'preTraining':
+        this_dic['data_path'] = os.path.join(args.allDataPath, args.dataset, 'graphs/base', 'COMPLETE', args.model)
+
+    # define task type: multi or single
     if args.dataset == 'calcSolLogP/ALL':
        this_dic['taskType'] = 'multi'
        args.num_tasks = 3
-    elif args.dataset == 'commonProperties':
-       this_dic['taskType'] = 'multi'
-       args.num_tasks = 4
     else:
        this_dic['taskType'] = 'single'
 
-    createResultsFile(this_dic, name='data.txt')
-
+    # load data size info for train/validation/test because we save all of them in one single file. 
     with open('/scratch/dz1061/gcn/chemGraph/configs/splitsize.json', 'r') as f:
         dataSizes = json.load(f)
-    #this_dic['train_size'] = int(dataSizes[args.dataset]['train_size'])
-    #this_dic['val_size'] = int(dataSizes[args.dataset]['val_size'])
     if args.dataset in ['sol_calc/ALL', 'solOct_calc/ALL', 'calcLogP/ALL', 'calcLogPWithWater/ALL', 'calcSolLogP/ALL', 'xlogp3', 'solWithWater_calc/ALL'] and args.style == 'preTraining':
-        this_dic['train_size'] = int(dataSizes[args.dataset+'/COMPLETE']['train_size'])
-        this_dic['val_size'] = int(dataSizes[args.dataset+'/COMPLETE']['val_size'])
-    else:
-        this_dic['train_size'] = int(dataSizes[args.dataset]['train_size'])
-        this_dic['val_size'] = int(dataSizes[args.dataset]['val_size'])
+        args.dataset = args.dataset+'/COMPLETE'
+    this_dic['train_size'], this_dic['val_size'] = int(dataSizes[args.dataset]['train_size']), int(dataSizes[args.dataset]['val_size'])
 
-    this_dic['gnn_type'] = args.gnn_type
-    #this_dic['data_path'] = '/beegfs/dz1061/gcn/chemGraph/data/zinc/graphs/preTraining/'+args.gnn_type
-    this_dic['JK'] = args.JK
-    if this_dic['pooling'] == 'set2set':
-        this_dic['pooling'] = list()
-        this_dic['pooling'].append('set2set')
-        this_dic['pooling'].append('2')
-
+    # load processed data 
     loader = get_data_loader(this_dic)
     train_loader, val_loader, test_loader, std, num_features, num_bond_features, num_i_2 = loader.train_loader, loader.val_loader, loader.test_loader, loader.std, loader.num_features, loader.num_bond_features, loader.num_i_2
     this_dic['num_features'], this_dic['num_bond_features'], this_dic['num_i_2'], this_dic['std'] = int(num_features), num_bond_features, num_i_2, std
     this_dic['train_size'], this_dic['val_size'], this_dic['test_size'] = len(train_loader.dataset), len(val_loader.dataset), len(test_loader.dataset)
-    this_dic['num_layer'] = args.num_layer
-    if args.gnn_type == 'pnaconv':
-        deg = torch.zeros(7, dtype=torch.long)
-        for data in train_loader:
-            d = degree(data.edge_index[1], num_nodes=data.num_nodes, dtype=torch.long)
-            deg += torch.bincount(d, minlength=deg.numel())
-        this_dic['degree'] = deg
+    
+    #if args.gnn_type == 'pnaconv':
+    #    deg = torch.zeros(7, dtype=torch.long)
+    #    for data in train_loader:
+    #        d = degree(data.edge_index[1], num_nodes=data.num_nodes, dtype=torch.long)
+    #        deg += torch.bincount(d, minlength=deg.numel())
+    #    this_dic['degree'] = deg
 
-    if args.style == 'best': # todo
-        with open(os.path.join(args.running_path, args.dataset, args.model, args.gnn_type, 'Exp_{}_l2/seed_31'.format(args.pooling), 'hpsearch.json'), 'r') as f:
-            best_config = json.load(f)
-        this_dic.update(best_config)
-
+    # for special cases 
     if args.EFGS:
         this_dic['efgs_lenth'] = len(vocab)
-    if args.interaction and args.dataset in ['ws', 'mp', 'deepchem/delaney']:
-        this_dic['soluteSelf'] = True
-    else:
-        this_dic['soluteSelf'] = False
-
     if args.residual_connect:
         this_dic['resLayer'] = args.resLayer
+    
+    # loading model
     model = get_model(this_dic)
-
-    if this_dic['train_type'] == 'from_scratch':
+    if this_dic['train_type'] == 'from_scratch': 
         model = init_weights(model, this_dic)
     if this_dic['train_type'] in ['finetuning', 'transfer']:
-        #list_of_files = glob.glob(os.path.join('/scratch/dz1061/gcn/chemGraph/results',args.preTrainedData, args.model, args.gnn_type, 'Pre_training', 'seed_31', 'best_model/', '*.pt'))
-        #latest_file = max(list_of_files, key=os.path.getctime)
-        #latest_file = os.path.join('/scratch/dz1061/gcn/chemGraph/results',args.preTrainedData, args.model, args.gnn_type, 'preTraining', 'Exp_layer5_dim64', 'seed_31', 'best_model/', 'bestModel.pt')
-        if args.model in ['1-GNN']:
-            latest_file = os.path.join('/scratch/dz1061/gcn/chemGraph/results',args.preTrainedData, '1-GNN', args.gnn_type, 'preTraining/all', 'Exp_layer5_dim256', 'seed_1', 'best_model/', 'bestModel.pt')
-            model.from_pretrained(latest_file)
-
-        if args.model == '1-2-GNN':
-            #latest_file = os.path.join('/scratch/dz1061/gcn/chemGraph/results',args.preTrainedData, '1-2-GNN', args.gnn_type, 'preTraining', 'Exp_layer5_dim64', 'seed_31', 'best_model/', 'bestModel.pt')  #from sol_calc
-            latest_file = os.path.join('/scratch/dz1061/gcn/chemGraph/results',args.preTrainedData, '1-2-GNN', args.gnn_type, 'newFinetuningFromws', 'Exp_layer5_dim256_lr0.001_decay', 'seed_31', 'best_model/', 'bestModel.pt') # from finetuning on itself
-            #latest_file = os.path.join('/scratch/dz1061/gcn/chemGraph/results',args.preTrainedData, '1-2-GNN', args.gnn_type, 'newData', 'Exp_layer5_dim64', 'seed_31', 'best_model/', 'bestModel.pt') # from train from scratch itself
-            #latest_file = os.path.join('/scratch/dz1061/gcn/chemGraph/results',args.preTrainedData, '1-2-GNN', args.gnn_type, 'preTraining/all', 'Exp_layer5_dim256', 'seed_31', 'best_model/', 'model_bestEpoch.pt')
-            #conv1_file = os.path.join('/scratch/dz1061/gcn/chemGraph/results',args.preTrainedData, '1-2-GNN', args.gnn_type, 'loopFinetuningFrompka', 'Exp_layer5_dim64', 'seed_31', 'best_model/', 'convISO1.pt')
-            #conv2_file = os.path.join('/scratch/dz1061/gcn/chemGraph/results',args.preTrainedData, '1-2-GNN', args.gnn_type, 'loopFinetuningFrompka', 'Exp_layer5_dim64', 'seed_31', 'best_model/', 'convISO2.pt')
-            model.from_pretrained(latest_file)
-
-        if args.model in ['1-interaction-GNN']:
-            solute_latest_file = os.path.join('/scratch/dz1061/gcn/chemGraph/results', args.preTrainedData, '1-interaction-GNN', args.gnn_type, 'preTraining/all', 'Exp_layer5_dim128', 'seed_1', 'best_model/', 'bestModel_solute.pt')
-            solvent_latest_file = os.path.join('/scratch/dz1061/gcn/chemGraph/results', args.preTrainedData, '1-interaction-GNN', args.gnn_type, 'preTraining/all', 'Exp_layer5_dim128', 'seed_1', 'best_model/', 'bestModel_hydrated_solute.pt')
-            model.from_pretrained(solute_latest_file, solvent_latest_file)
-
+        model.from_pretrained(preTrainedPath) # load weights for encoders 
+    
     if this_dic['train_type'] == 'transfer': # freeze encoder layers
         if this_dic['model'] in ['1-GNN']:
             for params in model.gnn.parameters():
@@ -189,21 +143,8 @@ def main():
         if this_dic['model'] in ['1-2-GNN']:
             for params in model.gnn.parameters():
                 params.requires_grad = False
-            #for params in model.ISO1.parameters():
-            #    params.requires_grad = False
-            #for params in model.ISO2.parameters():
-            #    params.requires_grad = False
-        if this_dic['model'] in ['1-interaction-GNN']:
-            for params in model.gnn_solute.parameters():
-                params.requires_grad = False
-            for params in model.gnn_solvent.parameters():
-                params.requires_grad = False
-
-
-
-    this_dic['NumParas'] = count_parameters(model)
-    model_ = model.to(device)
     
+    # define optimizers
     if this_dic['optimizer'] == 'adam':
         optimizer = torch.optim.Adam(model_.parameters(), lr=this_dic['lr'])
     if this_dic['optimizer'] == 'sgd':
@@ -213,41 +154,45 @@ def main():
     if this_dic['lr_style'] == 'decay':
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, factor=0.9, patience=5, min_lr=0.00001)
 
+    # count total # of trainable params
+    this_dic['NumParas'] = count_parameters(model)
+    # save out all input parameters 
     saveConfig(this_dic, name='config.json')
-    best_val_error = float("inf")
     
+    # defien training and testing 
+    model_ = model.to(device)
+    best_val_error = float("inf")
     if args.OnlyPrediction:
         this_dic['epochs'] = 1
         model_.eval()
     for epoch in range(1, this_dic['epochs']+1):
-         saveContents = []
-         time_tic = time.time()
-         #lr = scheduler.optimizer.param_groups[0]['lr']
-         if not args.OnlyPrediction:
-             loss = train(model_, optimizer, train_loader, this_dic)
-         else:
-             loss = 0.
-         time_toc = time.time()
+        saveContents = []
+        time_tic = time.time() # starting time
+        lr = scheduler.optimizer.param_groups[0]['lr']
+        if not args.OnlyPrediction:
+            loss = train(model_, optimizer, train_loader, this_dic)
+        else:
+            loss = 0.
+        time_toc = time.time() # ending time 
 
-         if this_dic['dataset'] in ['mp', 'mp_drugs', 'xlogp3', 'calcLogP/ALL', 'sol_calc/ALL', 'solOct_calc/ALL', 'solWithWater_calc/ALL', 'solOctWithWater_calc/ALL', 'calcLogPWithWater/ALL', 'qm9/nmr/carbon', 'qm9/nmr/hydrogen', 'qm9/nmr/allAtoms', 'calcSolLogP/ALL']:
-            train_error = loss
-         else:
+        if this_dic['dataset'] in ['mp', 'mp_drugs', 'xlogp3', 'calcLogP/ALL', 'sol_calc/ALL', \
+             'solOct_calc/ALL', 'solWithWater_calc/ALL', 'solOctWithWater_calc/ALL', 'calcLogPWithWater/ALL', \
+                 'qm9/nmr/carbon', 'qm9/nmr/hydrogen', 'qm9/nmr/allAtoms', 'calcSolLogP/ALL']:
+            train_error = loss # coz train set is too large to be tested every epoch
+        else:
             train_error = test(model_, train_loader, this_dic)
-         val_error = test(model_, val_loader, this_dic)
+        val_error = test(model_, val_loader, this_dic)
+        test_error = test(model_, test_loader, this_dic)
 
-         if args.style in ['base', 'preTraining']:
-            test_error = test(model_, test_loader, this_dic)
-         #if args.style == 'preTraining':
-         #   test_error = 0.
-         if this_dic['lr_style'] == 'decay':
+        if this_dic['lr_style'] == 'decay':
             scheduler.step(val_error)
 
-         if not this_dic['uncertainty']:
+        if not this_dic['uncertainty']:
             saveContents.append([model_, epoch, time_toc, time_tic, train_error,  \
                 val_error, test_error, param_norm(model_), grad_norm(model_)])
             saveToResultsFile(this_dic, saveContents[0], name='data.txt')
-            best_val_error = saveModel(this_dic, epoch, model_, best_val_error, val_error)
-         torch.save(model.state_dict(), os.path.join(this_dic['running_path'], 'trained_model', 'model_last.pt'))
+            best_val_error = saveModel(this_dic, epoch, model_, best_val_error, val_error) # save model if validation error hits new lower 
+        torch.save(model.state_dict(), os.path.join(this_dic['running_path'], 'trained_model', 'model_last.pt'))
 
 if __name__ == "__main__":
     #cycle_index(10,2)
