@@ -609,3 +609,78 @@ class NNConv_rev(MessagePassing):
             outs.append(out)
             #print(out.shape)
         return torch.cat(outs, dim=-1)
+
+def index_select_ND(source: torch.Tensor, index: torch.Tensor) -> torch.Tensor:
+    """
+    Selects the message features from source corresponding to the atom or bond indices in index.
+    :param source: A tensor of shape (num_bonds, hidden_size) containing message features.
+    :param index: A tensor of shape (num_atoms/num_bonds, max_num_bonds) containing the atom or bond
+    indices to select from source.
+    :return: A tensor of shape (num_atoms/num_bonds, max_num_bonds, hidden_size) containing the message
+    features corresponding to the atoms/bonds specified in index.
+    """
+    index_size = index.size()  # (num_atoms/num_bonds, max_num_bonds)
+    suffix_dim = source.size()[1:]  # (hidden_size,)
+    final_size = index_size + suffix_dim  # (num_atoms/num_bonds, max_num_bonds, hidden_size)
+
+    target = source.index_select(dim=0, index=index.view(-1))  # (num_atoms/num_bonds * max_num_bonds, hidden_size)
+    target = target.view(final_size)  # (num_atoms/num_bonds, max_num_bonds, hidden_size)
+
+    return target
+
+class AttrDict(dict):
+    def __init__(self, *args, **kwargs):
+        super(AttrDict, self).__init__(*args, **kwargs)
+        self.__dict__ = self
+
+class PositionalEncoding(nn.Module):
+    """
+    Implements the sinusoidal positional encoding for
+    non-recurrent neural networks.
+
+    Implementation based on "Attention Is All You Need"
+    :cite:`DBLP:journals/corr/VaswaniSPUJGKP17`
+    Also: https://pytorch.org/tutorials/beginner/transformer_tutorial.html
+    
+    Args:
+       dropout (float): dropout parameter
+       dim (int): embedding size
+    """
+
+    def __init__(self, dropout, dim, max_len=5000):
+        pe = torch.zeros(max_len, dim)
+        position = torch.arange(0, max_len).unsqueeze(1)
+        div_term = torch.exp((torch.arange(0, dim, 2, dtype=torch.float) *
+                             -(math.log(10000.0) / dim)))
+        pe[:, 0::2] = torch.sin(position.float() * div_term)
+        pe[:, 1::2] = torch.cos(position.float() * div_term)
+        pe = pe.unsqueeze(1)
+        super(PositionalEncoding, self).__init__()
+        self.register_buffer('pe', pe)
+        self.dropout = nn.Dropout(p=dropout)
+        self.dim = dim
+
+    def forward(self, emb, step=None):
+        emb = emb * math.sqrt(self.dim)
+        if step is None:
+            emb = emb + self.pe[:emb.size(0)]
+        else:
+            emb = emb + self.pe[step]
+        emb = self.dropout(emb)
+        return emb
+
+class LayerNorm(nn.Module):
+    """
+        Layer Normalization class
+    """
+
+    def __init__(self, features, eps=1e-6):
+        super(LayerNorm, self).__init__()
+        self.a_2 = nn.Parameter(torch.ones(features))
+        self.b_2 = nn.Parameter(torch.zeros(features))
+        self.eps = eps
+
+    def forward(self, x):
+        mean = x.mean(-1, keepdim=True)
+        std = x.std(-1, keepdim=True)
+        return self.a_2 * (x - mean) / (std + self.eps) + self.b_2
