@@ -174,7 +174,7 @@ class GNN_1(torch.nn.Module):
             else:
                 self.pool = GlobalAttention(gate_nn = torch.nn.Linear(self.emb_dim, 1))
         elif self.graph_pooling[:-1][0] == "set2set":
-            set2set_iter = int(self.graph_pooling[-1])
+            set2set_iter = 2
             if self.JK == "concat":
                 self.pool = Set2Set((self.num_layer + 1) * self.emb_dim, set2set_iter)
             else:
