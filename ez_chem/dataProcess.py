@@ -13,7 +13,7 @@ from three_level_frag import cleavage, AtomListToSubMol, standize, mol2frag, Wor
 from ifg import identify_functional_groups
 import numpy as np
 
-vocab = pickle.load(open('/scratch/dz1061/gcn/datasets/EFGS/vocab/ours/ours_vocab.pt', 'rb'))
+#vocab = pickle.load(open('/scratch/dz1061/gcn/datasets/EFGS/vocab/ours/ours_vocab.pt', 'rb'))
 
 def smiles2gdata(data):
     mol = Chem.MolFromSmiles(data.smiles)

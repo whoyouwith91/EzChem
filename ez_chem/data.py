@@ -1,5 +1,13 @@
 from dataProcess import *
 
+class get_split_data():
+    def __init__(self, config):
+        super(get_split_data)
+        
+        self.train = pd.read_csv(os.path.join(config['dataPath'], config['dataset'], 'train.csv'), names=['SMILES', 'target'])
+        self.valid = pd.read_csv(os.path.join(config['dataPath'], config['dataset'], 'train.csv'), names=['SMILES', 'target'])
+        self.test = pd.read_csv(os.path.join(config['dataPath'], config['dataset'], 'train.csv'), names=['SMILES', 'target'])
+        
 class get_data_loader():
     def __init__(self, config):
         self.config = config
