@@ -24,6 +24,22 @@ UQ = ['depths', 'NumOutLayers', 'pooling', 'num_features', 'num_i_2', 'uncertain
 TRANSFER = ['depths', 'NumOutLayers', 'pooling', 'num_features', 'num_i_2', 'transfer_from', 'pre_trained_path', 'pre_trained_model', 'params']
 ###############################################################################
 
+def set_seed(seed):
+# define seeds for training 
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(0)
+
+def get_optimizer(name, model):
+    # define optimizers
+    if name == 'adam':
+        optimizer = torch.optim.Adam(model.parameters(), lr=this_dic['lr'])
+    if name == 'sgd':
+        optimizer = torch.optim.SGD(model.parameters(), lr=this_dic['lr'], momentum=0.9, weight_decay=1e-4)
+    return optimizer
+    
+
 param_norm = lambda m: math.sqrt(sum([p.norm().item() ** 2 for p in m.parameters()]))
 grad_norm = lambda m: math.sqrt(sum([p.grad.norm().item() ** 2 for p in m.parameters() if p.grad is not None]))
 def count_parameters(model):

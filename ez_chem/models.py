@@ -78,10 +78,7 @@ class GNN(torch.nn.Module):
                 self.gnns.append(GraphSAGEConv(self.emb_dim, aggr=self.aggregate))
             elif self.gnn_type == 'pnaconv':
                 self.gnns.append(PNAConv_rev(self.emb_dim, aggr=self.aggregate, deg=config['degree']))
-                #aggregators = ['mean', 'min', 'max', 'std']
-                #scalers = ['identity', 'amplification', 'attenuation']
-                #self.gnns.append(NNConv_rev(emb_dim, emb_dim, aggregators,  scalers, degree))
-
+               
         ###List of batchnorms
         self.batch_norms = torch.nn.ModuleList()
         for _ in range(self.num_layer):
@@ -133,20 +130,6 @@ class GNN(torch.nn.Module):
 
 
 class GNN_1(torch.nn.Module):
-    """
-    Extension of GIN to incorporate edge information by concatenation.
-    Args:
-        num_layer (int): the number of GNN layers
-        emb_dim (int): dimensionality of embeddings
-        num_tasks (int): number of tasks in multi-task learning scenario
-        drop_ratio (float): dropout rate
-        JK (str): last, concat, max or sum.
-        graph_pooling (str): sum, mean, max, attention, set2set
-        gnn_type: gin, gcn, graphsage, gat
-        
-    See https://arxiv.org/abs/1810.00826
-    JK-net: https://arxiv.org/abs/1806.03536
-    """
     def __init__(self, config):
         super(GNN_1, self).__init__()
         self.dataset = config['dataset']
@@ -158,9 +141,14 @@ class GNN_1(torch.nn.Module):
         self.graph_pooling = config['pooling']
         self.propertyLevel = config['propertyLevel']
         self.gnn_type = config['gnn_type']
+        self.uncertainty = config['uncertainty']
+        self.weight_regularizer = config['weight_regularizer']
+        self.dropout_regularizer = config['dropout_regularizer']
 
         self.gnn = GNN(config)
         self.outLayers = nn.ModuleList()
+        if self.uncertainty:
+            self.uncertaintyLayers = nn.ModuleList()
         #Different kind of graph pooling
         if self.graph_pooling == "sum":
             self.pool = global_add_pool
@@ -191,19 +179,17 @@ class GNN_1(torch.nn.Module):
         else:
             raise ValueError("Invalid graph pooling type.")
 
-        
-
-        #For graph-level binary classification
-        if self.graph_pooling[:-1][0] == "set2set":
+        #For graph-level property predictions
+        if self.graph_pooling[:-1][0] == "set2set": # set2set will double dimension
             self.mult = 2
         else:
             self.mult = 1
         
-        if self.JK == "concat":
+        if self.JK == "concat": # change readout layers input and output dimension
             L_in, L_out = self.mult * (self.num_layer + 1) * self.emb_dim, self.emb_dim
-        if self.graph_pooling == 'conv':
+        if self.graph_pooling == 'conv': # change readout layers input and output dimension
             L_in = self.mult * self.emb_dim / 2, self.mult * self.emb_dim / 2
-        else:
+        else: # change readout layers input and output dimension
             L_in, L_out = self.mult * self.emb_dim, self.emb_dim
 
         fc = nn.Sequential(Linear(L_in, L_out), nn.ReLU())
@@ -212,8 +198,15 @@ class GNN_1(torch.nn.Module):
             L_in, L_out = self.outLayers[-1][0].out_features, int(self.outLayers[-1][0].out_features / 2)
             fc = nn.Sequential(Linear(L_in, L_out), torch.nn.ReLU())
             self.outLayers.append(fc)
+            if self.uncertainty: # for uncertainty 
+                self.uncertaintyLayers.append(NNDropout(weight_regularizer=self.weight_regularizer, dropout_regularizer=self.dropout_regularizer)) 
         last_fc = nn.Linear(L_out, self.num_tasks)
         self.outLayers.append(last_fc)
+
+        if self.config['uncertaintyMode'] == 'epistemic': 
+            self.drop_mu = NNDropout(weight_regularizer=self.weight_regularizer, dropout_regularizer=self.dropout_regularizer) # working on last layer
+        if self.config['uncertaintyMode'] == 'aleatoric': # 
+            self.outLayers.append(last_fc)      
 
     def from_pretrained(self, model_file):
         #self.gnn = GNN(self.num_layer, self.emb_dim, JK = self.JK, drop_ratio = self.drop_ratio)
@@ -235,30 +228,27 @@ class GNN_1(torch.nn.Module):
         if self.propertyLevel == 'atom':
             MolEmbed = node_representation 
 
-        for layer in self.outLayers:
-             MolEmbed = layer(MolEmbed)
-        if self.num_tasks > 1:
-            return MolEmbed, None
-        if self.propertyLevel == 'atom':
-            return MolEmbed.view(-1,1), None
+        if not self.uncertainty:
+            for layer in self.outLayers:
+                MolEmbed = layer(MolEmbed)
+            if self.num_tasks > 1:
+                return MolEmbed, None
+            if self.propertyLevel == 'atom':
+                return MolEmbed.view(-1,1), None
+            else:
+                return MolEmbed.view(-1), None
         else:
-            return MolEmbed.view(-1), None
+            for layer, drop in zip(self.outLayers[1:-1], self.uncertaintyLayers):
+                x, _ = drop(MolEmbed, layer)
+            if self.config['uncertainty'] == 'epistemic':
+                mean, regularization[-1] = self.drop_mu(x, self.outLayers[-1])
+                return mean.squeeze()
+            if self.config['uncertainty'] == 'aleatoric':
+                mean = self.outLayers[-2](x)
+                log_var = self.outLayers[-1](x)
+                return mean, log_var
 
 class GNN_1_2(torch.nn.Module):
-    """
-    Extension of GIN to incorporate edge information by concatenation.
-    Args:
-        num_layer (int): the number of GNN layers
-        emb_dim (int): dimensionality of embeddings
-        num_tasks (int): number of tasks in multi-task learning scenario
-        drop_ratio (float): dropout rate
-        JK (str): last, concat, max or sum.
-        graph_pooling (str): sum, mean, max, attention, set2set
-        gnn_type: gin, gcn, graphsage, gat
-        
-    See https://arxiv.org/abs/1810.00826
-    JK-net: https://arxiv.org/abs/1806.03536
-    """
     def __init__(self, config):
         super(GNN_1_2, self).__init__()
         self.num_layer = config['num_layer']
@@ -364,20 +354,6 @@ class GNN_1_2(torch.nn.Module):
             return MolEmbed.view(-1), None
 
 class GNN_1_EFGS(torch.nn.Module):
-    """
-    Extension of GIN to incorporate edge information by concatenation.
-    Args:
-        num_layer (int): the number of GNN layers
-        emb_dim (int): dimensionality of embeddings
-        num_tasks (int): number of tasks in multi-task learning scenario
-        drop_ratio (float): dropout rate
-        JK (str): last, concat, max or sum.
-        graph_pooling (str): sum, mean, max, attention, set2set
-        gnn_type: gin, gcn, graphsage, gat
-
-    See https://arxiv.org/abs/1810.00826
-    JK-net: https://arxiv.org/abs/1806.03536
-    """
     def __init__(self, config):
         super(GNN_1_EFGS, self).__init__()
         self.num_layer = config['num_layer']
@@ -477,20 +453,6 @@ class GNN_1_EFGS(torch.nn.Module):
 
 
 class GNN_1_WithWater(torch.nn.Module):
-    """
-    Extension of GIN to incorporate edge information by concatenation.
-    Args:
-        num_layer (int): the number of GNN layers
-        emb_dim (int): dimensionality of embeddings
-        num_tasks (int): number of tasks in multi-task learning scenario
-        drop_ratio (float): dropout rate
-        JK (str): last, concat, max or sum.
-        graph_pooling (str): sum, mean, max, attention, set2set
-        gnn_type: gin, gcn, graphsage, gat
-
-    See https://arxiv.org/abs/1810.00826
-    JK-net: https://arxiv.org/abs/1806.03536
-    """
     def __init__(self, config):
         super(GNN_1_WithWater, self).__init__()
         self.num_layer = config['num_layer']
@@ -574,19 +536,6 @@ class GNN_1_WithWater(torch.nn.Module):
             return final_representation.view(-1), None
 
 class GNN_1_WithWater_simpler(torch.nn.Module):
-    """
-    Extension of GIN to incorporate edge information by concatenation.
-    Args:
-        num_layer (int): the number of GNN layers
-        emb_dim (int): dimensionality of embeddings
-        num_tasks (int): number of tasks in multi-task learning scenario
-        drop_ratio (float): dropout rate
-        JK (str): last, concat, max or sum.
-        graph_pooling (str): sum, mean, max, attention, set2set
-        gnn_type: gin, gcn, graphsage, gat
-    See https://arxiv.org/abs/1810.00826
-    JK-net: https://arxiv.org/abs/1806.03536
-    """
     def __init__(self, config):
         super(GNN_1_WithWater_simpler, self).__init__()
         self.num_layer = config['num_layer']
@@ -674,6 +623,32 @@ class GNN_1_WithWater_simpler(torch.nn.Module):
             return final_representation, None
         else:
             return final_representation.view(-1), None
+
+class DNN(torch.nn.Module):
+    def __init__(self, in_size, hidden_size, out_size, n_hidden, activation, bn):
+        super().__init__()
+        self.bn = bn
+        # hidden layer
+        self.linear1 = nn.Linear(in_size, hidden_size)
+        self.hiddens = nn.ModuleList([nn.Linear(hidden_size, hidden_size) for i in range(n_hidden)])
+        self.bn_hiddens = nn.ModuleList([nn.BatchNorm1d(hidden_size) for i in range(n_hidden)])
+        self.bn = nn.BatchNorm1d(hidden_size)
+        # output layer
+        self.linear2 = nn.Linear(hidden_size, out_size)
+        self.activation = activation
+        
+    def forward(self, X):
+        out = self.linear1(X)
+        for linear, bn in zip(self.hiddens, self.bn_hiddens):
+            if self.bn:
+                out = bn(out)
+            out = self.activation(out)
+            out = linear(out)
+        if self.bn:
+            out = self.bn(out)
+        out = self.activation(out)
+        out = self.linear2(out)
+        return out
 
 if __name__ == "__main__":
     pass

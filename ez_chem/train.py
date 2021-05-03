@@ -67,17 +67,13 @@ def main():
     parser.add_argument('--propertyLevel', type=str, default='molecule')
     
     parser.add_argument('--uncertainty',  type=str)
-    parser.add_argument('--uncertainty_method',  type=str)
+    parser.add_argument('--uncertaintyMode',  type=str)
     parser.add_argument('--swag_start', type=int)
     parser.add_argument('--preTrainedData', type=str)
     args = parser.parse_args()
 
-    # define seeds for training 
-    torch.manual_seed(args.seed)
-    np.random.seed(args.seed)
+    set_seed(args.seed)
     device = torch.device("cuda:" + str(args.device)) if torch.cuda.is_available() else torch.device("cpu")
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(0)
 
     this_dic = vars(args)
     # define a path to save training results: save models and data
@@ -91,8 +87,8 @@ def main():
     # define path to load data for different training tasks
     if args.style == 'base': 
         this_dic['data_path'] = os.path.join(args.allDataPath, args.dataset, 'graphs', args.style, args.model)
-    if args.style == 'CV':
-        this_dic['data_path'] = os.path.join(args.allDataPath, args.dataset, 'graphs', args.style, args.model, 'cv_'+str(this_dic['cv_folder'])) 
+    #if args.style == 'CV':
+    #    this_dic['data_path'] = os.path.join(args.allDataPath, args.dataset, 'graphs', args.style, args.model, 'cv_'+str(this_dic['cv_folder'])) 
     if args.style == 'preTraining':
         this_dic['data_path'] = os.path.join(args.allDataPath, args.dataset, 'graphs/base', 'COMPLETE', args.model)
 
@@ -137,23 +133,21 @@ def main():
             for params in model.gnn.parameters():
                 params.requires_grad = False
     
-    # define optimizers
-    if this_dic['optimizer'] == 'adam':
-        optimizer = torch.optim.Adam(model_.parameters(), lr=this_dic['lr'])
-    if this_dic['optimizer'] == 'sgd':
-        optimizer = torch.optim.SGD(model_.parameters(), lr=this_dic['lr'], momentum=0.9, weight_decay=1e-4)
-    if this_dic['optimizer'] == 'swa':
-        optimizer = torchcontrib.optim.SWA(optimizer)
-    if this_dic['lr_style'] == 'decay':
-        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, factor=0.9, patience=5, min_lr=0.00001)
+    
 
     # count total # of trainable params
     this_dic['NumParas'] = count_parameters(model)
     # save out all input parameters 
     saveConfig(this_dic, name='config.json')
     
-    # defien training and testing 
+    # training parts
     model_ = model.to(device)
+    optimizer = get_optimizer(config['optimizer'], model_)
+    if this_dic['lr_style'] == 'decay':
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, factor=0.9, patience=5, min_lr=0.00001)
+    if this_dic['uncertainty']:
+        optimizer = torchcontrib.optim.SWA(optimizer)
+    
     best_val_error = float("inf")
     if args.OnlyPrediction:
         this_dic['epochs'] = 1
@@ -176,7 +170,6 @@ def main():
             train_error = test(model_, train_loader, this_dic)
         val_error = test(model_, val_loader, this_dic)
         test_error = test(model_, test_loader, this_dic)
-
         if this_dic['lr_style'] == 'decay':
             scheduler.step(val_error)
 

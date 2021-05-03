@@ -11,60 +11,34 @@ def cv_train(config, table):
         #config['data_path'] = os.path.join(config['cv_path'], 'cv_'+str(i)+'/')
         #print(config)
         #print(config['data_path'])   
-        torch.manual_seed(seed)
-        np.random.seed(seed)
+        set_seed(seed)
         device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
-        if torch.cuda.is_available():
-           torch.cuda.manual_seed_all(0)
         config['device'] = device
-
-        if config['pooling'] == 'set2set':
-           config['pooling'] = list()
-           config['pooling'].append('set2set')
-           config['pooling'].append('1')
 
         loader = get_data_loader(config)
         train_loader, val_loader, _, std, num_features, num_bond_features, num_i_2 = loader.train_loader, loader.val_loader, loader.test_loader, loader.std, loader.num_features, loader.num_bond_features, loader.num_i_2
         config['num_features'], config['num_bond_features'], config['num_i_2'], config['std'] = int(num_features), num_bond_features, num_i_2, std 
-        
-        #if config['model'] in ['loopybp', 'wlkernel']:
-        #   config['atom_fdim'] = int(num_features)
-        #   config['bond_fdim'] = int(num_bond_features)
-        #   config['atom_messages'] = False
-        #   config['outDim'] = config['dimension']
-        genModel = get_model(config)
-        args = objectview(config)
-        if config['model'] == '1-GNN':
-             model = genModel(args.num_layer, args.emb_dim, args.NumOutLayers, args.num_tasks, graph_pooling=args.pooling, gnn_type=args.gnn_type)
-        else:
-             model = genModel(args.num_layer, args.emb_dim, args.NumOutLayers, args.num_tasks, num_i_2, graph_pooling=args.pooling, gnn_type=args.gnn_type)
 
-        model_ = model.to(config['device'])
+        model = get_model(config)
+        args = objectview(config)
+        model_ = model.to(device)
         #num_params = param_count(model_)
-       
-        if config['optimizer'] == 'adam':
-            optimizer = torch.optim.Adam(model_.parameters(), lr=config['lr'])
-        if config['optimizer'] == 'sgd':
-            optimizer = torch.optim.SGD(model_.parameters(), lr=config['lr'], momentum=0.9, weight_decay=1e-4)
-        if config['optimizer'] == 'swa':
-            optimizer = torchcontrib.optim.SWA(optimizer)
-        if config['lr_style'] == 'decay':
+        
+        optimizer = get_optimizer(config['optimizer'], model_)
+        if this_dic['lr_style'] == 'decay':
             scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, factor=0.9, patience=5, min_lr=0.00001)
+        if this_dic['uncertainty']:
+            optimizer = torchcontrib.optim.SWA(optimizer)
 
         for _ in range(1, config['epochs']):
-            val_res = []
-
+            val_res, tst_res = []
             loss = train(model_, optimizer, train_loader, config)
-            
-            if config['dataset'] in ['mp', 'xlogp3']:
-                #train_error = np.asscalar(loss.data.cpu().numpy()) # don't test the entire train set.
-                train_error = loss
-            else:
-                train_error = test(model_, train_loader, config)
             val_error = test(model_, val_loader, config)
+            tst_error = test(model_, test_loader, config)
             val_res.append(val_error)
+            tst_res.append(tst_error)
         
-        results.append(min(val_res))
+        results.append(tst_res[val_res.index(min(val_res))])
     
     table.add_row([config['emb_dim'], config['num_layer'], config['NumOutLayers'], config['lr'], config['batch_size'], np.mean(results), np.std(results)])
     print(table)
@@ -85,14 +59,7 @@ def train(model, optimizer, dataloader, config):
         all_atoms = 0
 
     for data in dataloader:
-        if config['gnn_type'] not in ['loopybp', 'wlkernel', 'loopybp_dropout', 'wlkernel_dropout', 'loopybp_swag', 'wlkernel_swag']:
-            data = data.to(config['device'])
-        if config['gnn_type'] in ['loopybp', 'wlkernel', 'loopybp_dropout', 'wlkernel_dropout', 'loopybp_swag', 'wlkernel_swag']:
-            batchTargets = data.targets()
-            data = data.batch_graph()
-            data.y = torch.FloatTensor(batchTargets).to(config['device'])
-            data.y = data.y.view(-1)
-            
+        data = data.to(config['device'])
         optimizer.zero_grad()
         y0, _ = model(data)
         if config['taskType'] == 'single' and config['propertyLevel'] == 'molecule':
@@ -111,19 +78,12 @@ def train(model, optimizer, dataloader, config):
             all_loss += loss.item() * data.mask.sum()
             #print(loss)
             #sys.stdout.flush()
-
         loss.backward()
         if config['optimizer'] in ['sgd']:
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.)
         optimizer.step()
-        #y.extend(data.y.cpu().data.numpy())
-        #means.extend(y0.cpu().data.numpy())
-    #if config['dataset'] in ['mp', 'mp_drugs']:
-    #    rmse = np.mean((np.array(means).reshape(-1,) - np.array(y).squeeze())**2.)**0.5
-    #    return rmse
-    #else:
     if config['propertyLevel'] == 'atom':
-        return np.sqrt(all_loss.item() / all_atoms.item())
+        return all_loss.item() / all_atoms.item()
     if config['propertyLevel'] == 'molecule':
         return np.sqrt(all_loss / len(dataloader.dataset))
 
@@ -137,74 +97,62 @@ def test(model, dataloader, config):
         total_N = 0
     with torch.no_grad():
        for data in dataloader:
-            if config['gnn_type'] not in ['loopybp', 'wlkernel', 'loopybp_dropout', 'wlkernel_dropout', 'loopybp_swag', 'wlkernel_swag']:
-                data = data.to(config['device'])
-            if config['gnn_type'] in ['loopybp', 'wlkernel', 'loopybp_dropout', 'wlkernel_dropout', 'loopybp_swag', 'wlkernel_swag']:
-                y = data.targets()
-                bs = data.num_graphs
-                data = data.batch_graph()
-                data.y = torch.FloatTensor(y).to(config['device'])
-                data.y = data.y.view(-1)
-                data.num_graphs = bs
-            else:
-                if config['taskType'] == 'single' and config['propertyLevel'] == 'molecule':
-                    error += get_metrics_fn(config['metrics'])(model(data)[0], data.y) * data.num_graphs
-                if config['taskType'] == 'multi' and config['dataset'] == 'calcSolLogP/ALL':
-                    y0, _ = model(data)
-                    #error += (get_metrics_fn(config['loss'])(y0[:,0], data.y) + get_metrics_fn(config['loss'])(y0[:,1], data.y1) + get_metrics_fn(config['loss'])(y0[:,2], data.y2))*data.num_graphs
-                    error += get_metrics_fn(config['metrics'])(y0[:,0], data.y)*data.num_graphs
-                if config['taskType'] == 'multi' and config['dataset'] == 'commonProperties':
-                    y0, _ = model(data)
-                    error += (get_metrics_fn(config['metrics'])(y0[:,0], data.y) + get_loss_fn(config['metrics'])(y0[:,1], data.y1) + get_loss_fn(config['metrics'])(y0[:,2], data.y2) + get_loss_fn(config['metrics'])(y0[:,3], data.y3))*data.num_graphs
-                if config['propertyLevel'] == 'atom':
-                    total_N += data.mask.sum().item()
-                    error += get_metrics_fn(config['metrics'])(model(data)[0][data.mask>0].reshape(-1,1), data.y[data.mask>0].reshape(-1,1))*data.mask.sum().item()
-                    #error += MAE_loss(model(data)[0], data.y, data.mask)
+           data = data.to(config['device'])
+
+           if config['taskType'] == 'single' and config['propertyLevel'] == 'molecule':
+                error += get_metrics_fn(config['metrics'])(model(data)[0], data.y) * data.num_graphs
+           elif config['taskType'] == 'multi' and config['dataset'] == 'calcSolLogP/ALL':
+                y0, _ = model(data)
+                #error += (get_metrics_fn(config['loss'])(y0[:,0], data.y) + get_metrics_fn(config['loss'])(y0[:,1], data.y1) + get_metrics_fn(config['loss'])(y0[:,2], data.y2))*data.num_graphs
+                error += get_metrics_fn(config['metrics'])(y0[:,0], data.y)*data.num_graphs
+           elif config['taskType'] == 'multi' and config['dataset'] == 'commonProperties':
+                y0, _ = model(data)
+                error += (get_metrics_fn(config['metrics'])(y0[:,0], data.y) + get_loss_fn(config['metrics'])(y0[:,1], data.y1) + get_loss_fn(config['metrics'])(y0[:,2], data.y2) + get_loss_fn(config['metrics'])(y0[:,3], data.y3))*data.num_graphs
+           else config['propertyLevel'] == 'atom':
+                total_N += data.mask.sum().item()
+                error += get_metrics_fn(config['metrics'])(model(data)[0][data.mask>0].reshape(-1,1), data.y[data.mask>0].reshape(-1,1))*data.mask.sum().item()
+                #error += MAE_loss(model(data)[0], data.y, data.mask)
+       
        if config['dataset'] in ['qm9/u0']:
            return error.item() / len(dataloader.dataset) # MAE
        elif config['propertyLevel'] == 'atom' and config['dataset'] in ['nmr/hydrogen', 'nmr/carbon', 'qm9/nmr/carbon', 'qm9/nmr/hydrogen', 'qm9/nmr/allAtoms', 'qm9/nmr/carbon/smaller']:
            return error.item() / total_N # MAE
        else:
-           if config['taskType'] == 'single':
-              return math.sqrt(error / len(dataloader.dataset)) # RMSE for ws, logp, mp, etc.
-           if config['taskType'] == 'multi':
-              return math.sqrt(error / len(dataloader.dataset))
+           return math.sqrt(error / len(dataloader.dataset)) # RMSE for ws, logp, mp, etc.
 
 def train_dropout(model, optimizer, dataloader, config):
     model.train()
-    loss_all = 0
+    all_loss = 0
     y = []
     means = []
     logvars = []
     num = 0
     for data in dataloader:
         num += 1
-        if config['model'] not in ['loopybp', 'wlkernel', 'loopybp_dropout', 'wlkernel_dropout', 'loopybp_swag', 'wlkernel_swag']:
-            data = data.to(config['device'])
-        if config['model'] in ['loopybp', 'wlkernel', 'loopybp_dropout', 'wlkernel_dropout', 'loopybp_swag', 'wlkernel_swag']:
-            batchTargets = data.targets()
-            data = data.batch_graph()
-            data.y = torch.FloatTensor(batchTargets).to(config['device'])
-            data.y = data.y.view(-1)
+        data = data.to(config['device'])
         optimizer.zero_grad()
-        if config['uncertainty'] == 'aleatoric':
+
+        if config['uncertainty'] == 'aleatoric': # data uncertainty
             mean, log_var, _ = model(data)
             loss = get_loss_fn(config['loss'])(data.y, mean, log_var)
             logvars.extend(log_var.cpu().data.numpy())
-        if config['uncertainty'] == 'epistemic':
+
+        if config['uncertainty'] == 'epistemic': # model uncertainty
             mean = model(data)
             loss = get_loss_fn(config['loss'])(data.y, mean)
         y.extend(data.y.cpu().data.numpy())
         means.extend(mean.cpu().data.numpy())
         loss.backward()
-        if config['model'] in ['loopybp_dropout', '1-2-GNN_dropout', 'wlkernel_dropout']:
+        
+        if config['model'].endswith('dropout'):
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         optimizer.step()
-        loss_all += loss.cpu().data.numpy()
-    rmse = np.mean((np.array(means).reshape(-1,) - np.array(y).squeeze())**2.)**0.5
-    if config['uncertainty'] == 'aleatoric':
-        return loss_all/num, rmse, np.array(y), np.array(means), np.array(logvars)
-    if config['uncertainty'] == 'epistemic':
+
+        all_loss += loss.item() * data.num_graphs
+
+    if config['uncertainty'] == 'aleatoric': # todo
+        return np.sqrt(all_loss / len(dataloader.dataset)), rmse, np.array(y), np.array(means), np.array(logvars)
+    if config['uncertainty'] == 'epistemic': # todo
         return loss_all/num, rmse, None, None, None
 
 def train_unsuper(model, optimizer, dataloader, config):

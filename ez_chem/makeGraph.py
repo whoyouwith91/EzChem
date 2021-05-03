@@ -5,10 +5,13 @@ import numpy as np
 import pandas as pd
 from featurization import *
 from sklearn.model_selection import train_test_split
+from mordred import Calculator, descriptors
+from rdkit import Chem
 
 def parse_input_arguments():
     parser = argparse.ArgumentParser(description='Physicochemical prediction')
     parser.add_argument('--dataset', type=str)
+    parser.add_argument('--format', type=str, default='graphs')
     parser.add_argument('--model', type=str)
     parser.add_argument('--save_path', type=str, default='/scratch/dz1061/gcn/chemGraph/data/')
     parser.add_argument('--style', type=str, help='it is for base or different experiments')
@@ -38,7 +41,7 @@ def main():
             valid_raw = pd.read_csv(os.path.join(alldatapath, args.dataset, 'split', args.style, 'valid.csv'), names=['SMILES', 'target'])
             test_raw = pd.read_csv(os.path.join(alldatapath, args.dataset, 'split', args.style, 'test.csv'), names=['SMILES', 'target'])
  
-    if True:
+    if this_dic['format'] == 'graphs':
         examples = []
         all_data = pd.concat([train_raw, valid_raw, test_raw])
         
@@ -79,9 +82,9 @@ def main():
                         molgraphs['id'] = torch.FloatTensor([idx]) 
                         examples.append(molgraphs)
 
-                if not os.path.exists(os.path.join(this_dic['save_path'], args.dataset, 'graphs', args.style, this_dic['model'], 'cv_'+str(i), 'raw')):
-                    os.makedirs(os.path.join(this_dic['save_path'], args.dataset, 'graphs', args.style, this_dic['model'], 'cv_'+str(i), 'raw'))
-                torch.save(examples, os.path.join(this_dic['save_path'], args.dataset, 'graphs', args.style, this_dic['model'], 'cv_'+str(i), 'raw', 'temp.pt')) ###
+                if not os.path.exists(os.path.join(this_dic['save_path'], args.dataset, args.format, args.style, this_dic['model'], 'cv_'+str(i), 'raw')):
+                    os.makedirs(os.path.join(this_dic['save_path'], args.dataset, args.format, args.style, this_dic['model'], 'cv_'+str(i), 'raw'))
+                torch.save(examples, os.path.join(this_dic['save_path'], args.dataset, args.format, args.style, this_dic['model'], 'cv_'+str(i), 'raw', 'temp.pt')) ###
 
         else:
             if this_dic['dataset'] == 'calcSolLogP/ALL':
@@ -98,9 +101,9 @@ def main():
                         molgraphs['id'] = torch.FloatTensor([idx])
 
                         examples.append(molgraphs)
-                if not os.path.exists(os.path.join(this_dic['save_path'], args.dataset, 'graphs', args.style, this_dic['model'], 'raw')):
-                    os.makedirs(os.path.join(this_dic['save_path'], args.dataset, 'graphs', args.style, this_dic['model'], 'raw'))
-                torch.save(examples, os.path.join(this_dic['save_path'], args.dataset, 'graphs', args.style, this_dic['model'], 'raw', 'temp.pt'))
+                if not os.path.exists(os.path.join(this_dic['save_path'], args.dataset, args.format, args.style, this_dic['model'], 'raw')):
+                    os.makedirs(os.path.join(this_dic['save_path'], args.dataset, args.format, args.style, this_dic['model'], 'raw'))
+                torch.save(examples, os.path.join(this_dic['save_path'], args.dataset, args.format, args.style, this_dic['model'], 'raw', 'temp.pt'))
                 print('Finishing processing {} compounds'.format(all_data.shape[0]))
 
             else:
@@ -123,10 +126,23 @@ def main():
                         molgraphs['smiles'] = smi
                     molgraphs['id'] = torch.FloatTensor([idx])
                     examples.append(molgraphs)
-                if not os.path.exists(os.path.join(this_dic['save_path'], args.dataset, 'graphs', args.style, this_dic['model'], 'raw')):
-                    os.makedirs(os.path.join(this_dic['save_path'], args.dataset, 'graphs', args.style, this_dic['model'], 'raw'))
-                torch.save(examples, os.path.join(this_dic['save_path'], args.dataset, 'graphs', args.style, this_dic['model'], 'raw', 'temp.pt')) ###
+                if not os.path.exists(os.path.join(this_dic['save_path'], args.dataset, args.format, args.style, this_dic['model'], 'raw')):
+                    os.makedirs(os.path.join(this_dic['save_path'], args.dataset, args.format, args.style, this_dic['model'], 'raw'))
+                torch.save(examples, os.path.join(this_dic['save_path'], args.dataset, args.format, args.style, this_dic['model'], 'raw', 'temp.pt')) ###
                 print('Finishing processing {} compounds'.format(all_data.shape[0]))
+    
+    if this_dic['format'] == 'descriptors':
+        calc = Calculator(descriptors, ignore_3D=True)
+        examples = []
+        all_data = pd.concat([train_raw, valid_raw, test_raw])
+        for smi in all_data['SMILES']:
+            mol = Chem.MolFromSmiles(smi)
+            examples.append(calc(mol)[1:])
+        if not os.path.exists(os.path.join(this_dic['save_path'], args.dataset, args.format, args.style, this_dic['model'], 'raw')):
+            os.makedirs(os.path.join(this_dic['save_path'], args.dataset, args.format, args.style, this_dic['model'], 'raw'))
+        torch.save(examples, os.path.join(this_dic['save_path'], args.dataset, args.format, args.style, this_dic['model'], 'raw', 'temp.pt')) ###
+        print('Finishing processing {} compounds'.format(all_data.shape[0]))
+        
 
 if __name__ == '__main__':
     main()

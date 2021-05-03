@@ -253,57 +253,20 @@ class NNCon(torch.nn.Module):
         return self.conv_(x, edge_index[0], edge_embeddings)
 
 class NNDropout(nn.Module):
-    def __init__(self, level, weight_regularizer=1e-6,
-                 dropout_regularizer=1e-5, init_min=0.1, init_max=0.1):
+    def __init__(self, weight_regularizer=1e-6, dropout_regularizer=1e-5, init_min=0.1, init_max=0.1):
         super(NNDropout, self).__init__()
-
-        self.level = level
         self.weight_regularizer = weight_regularizer
         self.dropout_regularizer = dropout_regularizer
         
         init_min = np.log(init_min) - np.log(1. - init_min)
         init_max = np.log(init_max) - np.log(1. - init_max)
         
-        self.p_logit = nn.Parameter(torch.empty(1).uniform_(init_min, init_max))
-        
-    def forward(self, data, layer):
-        #p = torch.sigmoid(self.p_logit) # this is the drop out probablity, trainable. 
-        p = torch.scalar_tensor(0.1)
-        
-        #----------------------------------------------------------------------------------
-        if self.level == 'node':
-            out = layer(self._concrete_dropout(data.x, p), data.edge_index, data.edge_attr)
-            x = out
-        elif self.level == 'subgraph':
-            #drop_x = self._concrete_dropout(data.x, p)
-            out = layer(self._concrete_dropout(data.x, p), data.edge_index_2)
-            x = out
-        elif self.level == 'graph':
-            out = layer(self._concrete_dropout(data, p))
-            x = out
-        #----------------------------------------------------------------------------------
-        
-        sum_of_square = 0
-        for param in layer.parameters():
-            sum_of_square += torch.sum(torch.pow(param, 2))
-        
-        weights_regularizer = self.weight_regularizer * sum_of_square / (1 - p)
-        
-        dropout_regularizer = p * torch.log(p)
-        dropout_regularizer += (1. - p) * torch.log(1. - p)
-        
-        input_dimensionality = x[0].numel() # Number of elements of first item in batch
-        #print(input_dimensionality)
-        dropout_regularizer *= self.dropout_regularizer * input_dimensionality
-        
-        regularization = weights_regularizer + dropout_regularizer
-        return out, regularization
-        
+        self.p_logit = nn.Parameter(torch.empty(1).uniform_(init_min, init_max)) # 
+    
     def _concrete_dropout(self, x, p):
         # This is like reparameterization tricks. 
         eps = 1e-7
-        temp = 0.1
-        
+        temp = 0.1 
         # Concrete distribution relaxation of the Bernoulli random variable
         unif_noise = torch.rand_like(x)
 
@@ -320,6 +283,28 @@ class NNDropout(nn.Module):
         x /= retain_prob
         
         return x
+
+    def forward(self, data, layer):
+        #p = torch.sigmoid(self.p_logit) # this is the drop out probablity, trainable. 
+        p = torch.scalar_tensor(0.1)
+        out = layer(self._concrete_dropout(data, p))
+        x = out
+        
+        sum_of_square = 0
+        for param in layer.parameters():
+            sum_of_square += torch.sum(torch.pow(param, 2))
+        
+        weights_regularizer = self.weight_regularizer * sum_of_square / (1 - p)
+        
+        dropout_regularizer = p * torch.log(p)
+        dropout_regularizer += (1. - p) * torch.log(1. - p)
+        
+        input_dimensionality = x[0].numel() # Number of elements of first item in batch
+        #print(input_dimensionality)
+        dropout_regularizer *= self.dropout_regularizer * input_dimensionality
+        
+        regularization = weights_regularizer + dropout_regularizer
+        return out, regularization    
 
 class PNAConv_rev(MessagePassing):
     def __init__(self, emb_dim, aggr='', deg=0, towers=4, pre_layers=1, post_layers=1, divide_input=False):
