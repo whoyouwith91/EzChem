@@ -52,8 +52,6 @@ def train(model, optimizer, dataloader, config):
     Define loss and backpropagation
     '''
     model.train()
-    #y = []
-    #means = []
     all_loss = 0
     if config['propertyLevel'] == 'atom':
         all_atoms = 0
@@ -65,19 +63,16 @@ def train(model, optimizer, dataloader, config):
         if config['taskType'] == 'single' and config['propertyLevel'] == 'molecule':
             loss = get_loss_fn(config['loss'])(y0, data.y)
             all_loss += loss.item() * data.num_graphs
-        if config['taskType'] == 'multi' and config['dataset'] == 'calcSolLogP/ALL':
+        elif config['taskType'] == 'multi' and config['dataset'] == 'calcSolLogP/ALL':
             loss = get_loss_fn(config['loss'])(y0[:,0], data.y) + get_loss_fn(config['loss'])(y0[:,1], data.y1) + get_loss_fn(config['loss'])(y0[:,2], data.y2)
             all_loss += loss.item() * data.num_graphs
-        if config['dataset'] == 'commonProperties':
-            loss = get_loss_fn(config['loss'])(y0[:,0], data.y) + get_loss_fn(config['loss'])(y0[:,1], data.y1) + get_loss_fn(config['loss'])(y0[:,2], data.y2) + get_loss_fn(config['loss'])(y0[:,3], data.y3)
-            all_loss += loss.item() * data.num_graphs
-        if config['propertyLevel'] == 'atom':
-            #print(y0[data.mask>0])
+        elif config['propertyLevel'] == 'atom':
             loss = get_loss_fn(config['loss'])(data.y, y0, data.mask)
             all_atoms += data.mask.sum()
             all_loss += loss.item() * data.mask.sum()
-            #print(loss)
-            #sys.stdout.flush()
+        else:
+            raise "LossError"
+ 
         loss.backward()
         if config['optimizer'] in ['sgd']:
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.)
@@ -89,7 +84,7 @@ def train(model, optimizer, dataloader, config):
 
 def test(model, dataloader, config):
     '''
-    taskType
+    Test model's performance
     '''
     model.eval()
     error = 0
@@ -98,20 +93,17 @@ def test(model, dataloader, config):
     with torch.no_grad():
        for data in dataloader:
            data = data.to(config['device'])
-
            if config['taskType'] == 'single' and config['propertyLevel'] == 'molecule':
-                error += get_metrics_fn(config['metrics'])(model(data)[0], data.y) * data.num_graphs
+               error += get_metrics_fn(config['metrics'])(model(data)[0], data.y) * data.num_graphs
            elif config['taskType'] == 'multi' and config['dataset'] == 'calcSolLogP/ALL':
-                y0, _ = model(data)
-                #error += (get_metrics_fn(config['loss'])(y0[:,0], data.y) + get_metrics_fn(config['loss'])(y0[:,1], data.y1) + get_metrics_fn(config['loss'])(y0[:,2], data.y2))*data.num_graphs
-                error += get_metrics_fn(config['metrics'])(y0[:,0], data.y)*data.num_graphs
-           elif config['taskType'] == 'multi' and config['dataset'] == 'commonProperties':
-                y0, _ = model(data)
-                error += (get_metrics_fn(config['metrics'])(y0[:,0], data.y) + get_loss_fn(config['metrics'])(y0[:,1], data.y1) + get_loss_fn(config['metrics'])(y0[:,2], data.y2) + get_loss_fn(config['metrics'])(y0[:,3], data.y3))*data.num_graphs
-           else config['propertyLevel'] == 'atom':
-                total_N += data.mask.sum().item()
-                error += get_metrics_fn(config['metrics'])(model(data)[0][data.mask>0].reshape(-1,1), data.y[data.mask>0].reshape(-1,1))*data.mask.sum().item()
-                #error += MAE_loss(model(data)[0], data.y, data.mask)
+               y0, _ = model(data)
+               #error += (get_metrics_fn(config['loss'])(y0[:,0], data.y) + get_metrics_fn(config['loss'])(y0[:,1], data.y1) + get_metrics_fn(config['loss'])(y0[:,2], data.y2))*data.num_graphs
+               error += get_metrics_fn(config['metrics'])(y0[:,0], data.y) * data.num_graphs
+           elif config['propertyLevel'] == 'atom':
+               total_N += data.mask.sum().item()
+               error += get_metrics_fn(config['metrics'])(model(data)[0][data.mask>0].reshape(-1,1), data.y[data.mask>0].reshape(-1,1))*data.mask.sum().item()
+           else:
+               raise "MetricsError"
        
        if config['dataset'] in ['qm9/u0']:
            return error.item() / len(dataloader.dataset) # MAE

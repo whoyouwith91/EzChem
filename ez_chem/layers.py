@@ -253,7 +253,7 @@ class NNCon(torch.nn.Module):
         return self.conv_(x, edge_index[0], edge_embeddings)
 
 class NNDropout(nn.Module):
-    def __init__(self, weight_regularizer=1e-6, dropout_regularizer=1e-5, init_min=0.1, init_max=0.1):
+    def __init__(self, weight_regularizer, dropout_regularizer, init_min=0.1, init_max=0.1):
         super(NNDropout, self).__init__()
         self.weight_regularizer = weight_regularizer
         self.dropout_regularizer = dropout_regularizer

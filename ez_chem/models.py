@@ -142,6 +142,7 @@ class GNN_1(torch.nn.Module):
         self.propertyLevel = config['propertyLevel']
         self.gnn_type = config['gnn_type']
         self.uncertainty = config['uncertainty']
+        self.uncertaintyMode = config['uncertaintyMode']
         self.weight_regularizer = config['weight_regularizer']
         self.dropout_regularizer = config['dropout_regularizer']
 
@@ -203,9 +204,9 @@ class GNN_1(torch.nn.Module):
         last_fc = nn.Linear(L_out, self.num_tasks)
         self.outLayers.append(last_fc)
 
-        if self.config['uncertaintyMode'] == 'epistemic': 
+        if self.uncertaintyMode == 'epistemic': 
             self.drop_mu = NNDropout(weight_regularizer=self.weight_regularizer, dropout_regularizer=self.dropout_regularizer) # working on last layer
-        if self.config['uncertaintyMode'] == 'aleatoric': # 
+        if self.uncertaintyMode == 'aleatoric': # 
             self.outLayers.append(last_fc)      
 
     def from_pretrained(self, model_file):

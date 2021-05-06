@@ -16,7 +16,7 @@ import numpy as np
 data_config = ['dataset', 'normalize', 'style', 'data_path', 'EFGS', 'efgs_lenth', 'num_i_2']
 model_config = ['model', 'gnn_type',  'batch_size', 'emb_dim', 'act_fn' , 'weights', 'num_features', \
          'num_bond_features', 'pooling', 'NumParas', 'num_layer', 'JK', 'NumOutLayers', 'aggregate', \
-             'residual_connect', 'resLayer', 'interaction_simpler']
+             'residual_connect', 'resLayer', 'interaction_simpler', 'weight_regularizer', 'dropout_regularizer']
 train_config = ['running_path', 'seed', 'num_tasks', 'propertyLevel', 'optimizer', 'loss', 'metrics', 'lr', 'lr_style', \
          'epochs', 'early_stopping', 'train_type', 'taskType', 'train_size', 'val_size', 'test_size', \
          'preTrainedPath', 'uncertainty', 'uncertaintyMode', 'swag_start']
@@ -32,12 +32,12 @@ def set_seed(seed):
     #torch.backends.cudnn.benchmark = False
     #torch.backends.cudnn.deterministic = True
 
-def get_optimizer(name, model):
+def get_optimizer(args, model):
     # define optimizers
-    if name == 'adam':
-        optimizer = torch.optim.Adam(model.parameters(), lr=this_dic['lr'])
-    if name == 'sgd':
-        optimizer = torch.optim.SGD(model.parameters(), lr=this_dic['lr'], momentum=0.9, weight_decay=1e-4)
+    if args.optimizer == 'adam':
+        optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+    if args.optimizer == 'sgd':
+        optimizer = torch.optim.SGD(model.parameters(), lr=args.lr, momentum=0.9, weight_decay=1e-4)
     return optimizer
 
 
@@ -120,16 +120,6 @@ def get_metrics_fn(name):
         return F.mse_loss
     if name == 'smooth_l1':
         return F.smooth_l1_loss
-
-def set_seed(seed):
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
-    np.random.seed(seed)
-    random.seed(seed)
-    os.environ['PYTHONHASHSEED'] = str(seed)
-
 
 def activation_func(config):
     name = config['act_fn']
@@ -216,9 +206,9 @@ def saveToResultsFile(this_dic, contents, name='data.txt'):
     if this_dic['model'] in ['1-GNN', '1-2-GNN', '1-efgs-GNN', '1-2-efgs-GNN', '1-interaction-GNN', 'Roberta']: # 1-2-GNN, loopybp, wlkernel
         assert len(contents) == 8
         with open(os.path.join(this_dic['running_path'], 'data.txt'), 'a') as f1:
-            f1.write(str(contents[1]) + '\t' + str(round(contents[2], 2)) + '\t' + str(round(contents[3], 7)) + '\t' + \
-                str(round(contents[4], 7)) + '\t' + str(round(contents[5], 7)) + '\t' + str(round(contents[6], 7)) + '\t' \
-                    + str(contents[7]) + '\t' + str(contents[8]) + '\n')
+            f1.write(str(contents[0]) + '\t' + str(round(contents[1], 2)) + '\t' + str(round(contents[2], 7)) + '\t' + \
+                str(round(contents[3], 7)) + '\t' + str(round(contents[4], 7)) + '\t' + str(round(contents[5], 7)) + '\t' \
+                    + str(contents[6]) + '\t' + str(contents[7]) + '\n')
 
 def saveConfig(this_dic, name='config.json'):
     all_ = {'data_config': {key:this_dic[key] for key in data_config if key in this_dic.keys()},
@@ -253,7 +243,6 @@ def saveModel(config, epoch, model, bestValError, valError, swag_model=None):
             if config['model'].endswith('swag'):
                 torch.save(swag_model.state_dict(), os.path.join(config['running_path'], 'best_model', 'swag_model_'+str(epoch)+'.pt'))
     return bestValError
-
 
 class objectview(object):
     def __init__(self, d):
