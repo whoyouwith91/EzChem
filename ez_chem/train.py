@@ -44,11 +44,9 @@ def main():
     parser.add_argument('--EFGS', action='store_true')
     parser.add_argument('--residual_connect', action='store_true')
     parser.add_argument('--resLayer', type=int, default=-1)
-    parser.add_argument('--interaction', type=str, default="")
     parser.add_argument('--interaction_simpler', action='store_true')
     parser.add_argument('--pooling', type=str, default='sum')
     parser.add_argument('--aggregate', type=str, default='add')
-    parser.add_argument('--degree', type=int, default=0)
     parser.add_argument('--gnn_type', type=str, default="gin")
     parser.add_argument('--JK', type=str, default="last",
                         help='how the node features are combined across layers. last, sum, max or concat')
@@ -69,7 +67,6 @@ def main():
     parser.add_argument('--uncertainty',  type=str)
     parser.add_argument('--uncertaintyMode',  type=str)
     parser.add_argument('--swag_start', type=int)
-    parser.add_argument('--preTrainedData', type=str)
     args = parser.parse_args()
 
     set_seed(args.seed)

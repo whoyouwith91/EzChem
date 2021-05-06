@@ -13,15 +13,14 @@ from torch_geometric.typing import Adj
 import numpy as np
 
 ################### Configuration setting names ############################
-BASIC = ['dataset', 'running_path', 'model', 'gnn_type', 'normalize', 'batch_size', 'emb_dim', \
-         'dropout', 'act_fn' , 'weights', 'seed', 'optimizer', 'loss', 'metrics', 'lr', 'lr_style', \
-         'epochs', 'early_stopping', 'train_type', 'taskType', 'style', 'train_size', 'val_size', 'num_features', \
-          'num_bond_features', 'data_path', 'efgs', 'water_interaction', 'InterByConcat', 'InterBySub', 'mol', 'pooling', 'NumParas', 'efgs_lenth', 'EFGS', 'solvent', 'interaction']
-GNN = ['depths', 'num_layer', 'JK', 'NumOutLayers', 'pooling', 'num_features', 'num_i_2', 'pooling']
-GNNVariants = ['efgs', 'water_interaction', 'InterByConcat', 'InterBySub', 'mol', 'num_i_2']
-VAE_opts = ['vocab_path', 'vocab_name', 'vocab_size', 'numEncoLayers', 'numDecoLayers', 'numEncoders', 'numDecoders', 'varDimen', 'anneal', 'kl_weight', 'anneal_method', 'anneal_epoch']
-UQ = ['depths', 'NumOutLayers', 'pooling', 'num_features', 'num_i_2', 'uncertainty', 'uncertainty_method', 'swag_start', 'num_i_2', 'atom_fdim', 'bond_fdim', 'atom_messages', 'outDim', 'weight_regularizer', 'dropout_regularizer']
-TRANSFER = ['depths', 'NumOutLayers', 'pooling', 'num_features', 'num_i_2', 'transfer_from', 'pre_trained_path', 'pre_trained_model', 'params']
+data_config = ['dataset', 'normalize', 'style', 'data_path', 'EFGS', 'efgs_lenth', 'num_i_2']
+model_config = ['model', 'gnn_type',  'batch_size', 'emb_dim', 'act_fn' , 'weights', 'num_features', \
+         'num_bond_features', 'pooling', 'NumParas', 'num_layer', 'JK', 'NumOutLayers', 'aggregate', \
+             'residual_connect', 'resLayer', 'interaction_simpler']
+train_config = ['running_path', 'seed', 'num_tasks', 'propertyLevel', 'optimizer', 'loss', 'metrics', 'lr', 'lr_style', \
+         'epochs', 'early_stopping', 'train_type', 'taskType', 'train_size', 'val_size', 'test_size', \
+         'preTrainedPath', 'uncertainty', 'uncertaintyMode', 'swag_start']
+#VAE_opts = ['vocab_path', 'vocab_name', 'vocab_size', 'numEncoLayers', 'numDecoLayers', 'numEncoders', 'numDecoders', 'varDimen', 'anneal', 'kl_weight', 'anneal_method', 'anneal_epoch']
 ###############################################################################
 
 def set_seed(seed):
@@ -30,6 +29,8 @@ def set_seed(seed):
     np.random.seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(0)
+    #torch.backends.cudnn.benchmark = False
+    #torch.backends.cudnn.deterministic = True
 
 def get_optimizer(name, model):
     # define optimizers
@@ -38,7 +39,7 @@ def get_optimizer(name, model):
     if name == 'sgd':
         optimizer = torch.optim.SGD(model.parameters(), lr=this_dic['lr'], momentum=0.9, weight_decay=1e-4)
     return optimizer
-    
+
 
 param_norm = lambda m: math.sqrt(sum([p.norm().item() ** 2 for p in m.parameters()]))
 grad_norm = lambda m: math.sqrt(sum([p.grad.norm().item() ** 2 for p in m.parameters() if p.grad is not None]))
@@ -191,8 +192,8 @@ def createResultsFile(this_dic, name='data.txt'):
                 header = 'Epoch' + '\t' + 'Time' + '\t' + 'LR' + '\t' + 'Train RMSE' + '\t' + 'Valid RMSE' + '\t' + 'Test RMSE' + '\t' + 'Train SWAG RMSE' + '\t' + 'Valid SWAG RMSE' + '\t' + 'Test SWAG RMSE' + '\t' + 'PNorm'+ '\t' + 'GNorm' + '\n' 
             elif this_dic['uncertainty'] and this_dic['uncertainty_method'] == 'dropout':
                 header = 'Epoch' + '\t' + 'Time' + '\t' + 'LR' + '\t' + 'Train Loss' + '\t' + 'Train RMSE' + '\t' + 'Valid Loss' + '\t' + 'Valid RMSE' + '\t' + 'Test Loss' + '\t' + 'Test RMSE' + '\t' + 'PNorm'+ '\t' + 'GNorm' + '\n'
-            elif this_dic['model'] in ['VAE', 'TransformerUnsuper']:
-                header = 'Epoch' + '\t' + 'Time' + '\t' + 'LR' + '\t' + 'Train Loss' + '\t' + 'Valid Loss' + '\t' + 'Test Loss' + '\t' + 'PNorm'+ '\t' + 'GNorm' + '\n'
+            #elif this_dic['model'] in ['VAE', 'TransformerUnsuper']:
+            #    header = 'Epoch' + '\t' + 'Time' + '\t' + 'LR' + '\t' + 'Train Loss' + '\t' + 'Valid Loss' + '\t' + 'Test Loss' + '\t' + 'PNorm'+ '\t' + 'GNorm' + '\n'
             else:
                 header = 'Epoch' + '\t' + 'Time' + '\t' + 'LR' + '\t' + 'Train RMSE' + '\t' + 'Valid RMSE' + '\t' + 'Test RMSE' + '\t' + 'PNorm'+ '\t' + 'GNorm' + '\n'
             f.write(header)
@@ -220,24 +221,11 @@ def saveToResultsFile(this_dic, contents, name='data.txt'):
                     + str(contents[7]) + '\t' + str(contents[8]) + '\n')
 
 def saveConfig(this_dic, name='config.json'):
-    if this_dic['model'] in ['1-GNN', '1-2-GNN', '1-efgs-GNN', '1-2-efgs-GNN', '1-interaction-GNN', '1-interaction-GNN-naive']:
-        configs = BASIC + GNN
-    elif this_dic['model'] in ['Roberta']:
-        configs = BASIC 
-    elif this_dic['uncertainty']:
-        configs = BASIC + UQ
-    elif this_dic['model'] in ['VAE', 'TransformerUnsuper']:
-        configs = BASIC + VAE_opts 
-    elif this_dic['water_interaction']:
-        configs = BASIC + GNNVariants
-    elif this_dic['transfer_from']:
-        configs = BASIC + TRANSFER
-    else:
-        configs = BASIC
-       
+    all_ = {'data_config': {key:this_dic[key] for key in data_config if key in this_dic.keys()},
+            'model_config':{key:this_dic[key] for key in model_config if key in this_dic.keys()},
+            'train_config': {key:this_dic[key] for key in train_config if key in this_dic.keys()}}
     with open(os.path.join(this_dic['running_path'], name), 'w') as f:
-            #print(this_dic)
-            json.dump({key: value for key, value in this_dic.items() if key in configs}, f)
+        json.dump(all_, f, indent=2)
 
 def loadConfig(path, name='config.json'):
     with open(os.path.join(path,name), 'r') as f:
