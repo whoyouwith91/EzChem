@@ -132,8 +132,6 @@ def main():
             for params in model.gnn.parameters():
                 params.requires_grad = False
     
-    
-
     # count total # of trainable params
     this_dic['NumParas'] = count_parameters(model)
     # save out all input parameters 
