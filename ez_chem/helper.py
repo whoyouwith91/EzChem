@@ -8,8 +8,8 @@ from torch_sparse import SparseTensor
 from torch_scatter import scatter_mean, scatter_add, scatter_max
 import torch_geometric.transforms as T
 from typing import Optional
-from torch_geometric.typing import Adj
-
+from prettytable import PrettyTable
+import pandas as pd
 import numpy as np
 
 ################### Configuration setting names ############################
@@ -174,25 +174,25 @@ def pooling(config):
        config['set2setSteps'] = 3
        return set2set(config['dimension']*2, config['set2setSteps'])
 
-def createResultsFile(this_dic, name='data.txt'):
-    with open(os.path.join(this_dic['running_path'], name), 'w') as f:
-            if this_dic['dataset'] in ['qm9', 'nmr/carbon', 'nmr/hydrogen', 'qm9/nmr/carbon', 'qm9/nmr/hydrogen']:
-                header = 'Epoch' + '\t' + 'Time' + '\t' + 'LR' + '\t' + 'Train MAE' + '\t' + 'Valid MAE' + '\t' + 'Test MAE' + '\t' + 'PNorm'+ '\t' + 'GNorm' + '\n'
-            elif this_dic['uncertainty'] and this_dic['uncertainty_method'] == 'swag':
-                header = 'Epoch' + '\t' + 'Time' + '\t' + 'LR' + '\t' + 'Train RMSE' + '\t' + 'Valid RMSE' + '\t' + 'Test RMSE' + '\t' + 'Train SWAG RMSE' + '\t' + 'Valid SWAG RMSE' + '\t' + 'Test SWAG RMSE' + '\t' + 'PNorm'+ '\t' + 'GNorm' + '\n' 
-            elif this_dic['uncertainty'] and this_dic['uncertainty_method'] == 'dropout':
-                header = 'Epoch' + '\t' + 'Time' + '\t' + 'LR' + '\t' + 'Train Loss' + '\t' + 'Train RMSE' + '\t' + 'Valid Loss' + '\t' + 'Valid RMSE' + '\t' + 'Test Loss' + '\t' + 'Test RMSE' + '\t' + 'PNorm'+ '\t' + 'GNorm' + '\n'
-            #elif this_dic['model'] in ['VAE', 'TransformerUnsuper']:
-            #    header = 'Epoch' + '\t' + 'Time' + '\t' + 'LR' + '\t' + 'Train Loss' + '\t' + 'Valid Loss' + '\t' + 'Test Loss' + '\t' + 'PNorm'+ '\t' + 'GNorm' + '\n'
-            else:
-                header = 'Epoch' + '\t' + 'Time' + '\t' + 'LR' + '\t' + 'Train RMSE' + '\t' + 'Valid RMSE' + '\t' + 'Test RMSE' + '\t' + 'PNorm'+ '\t' + 'GNorm' + '\n'
-            f.write(header)
+def createResultsFile(this_dic):
+    ## create pretty table
+    if this_dic['dataset'] in ['qm9', 'nmr/carbon', 'nmr/hydrogen', 'qm9/nmr/carbon', 'qm9/nmr/hydrogen']:
+        header = ['Epoch', 'Time', 'LR', 'Train MSE', 'Valid MAE', 'Test MAE', 'PNorm', 'GNorm']
+    elif this_dic['uncertainty'] and this_dic['uncertainty_method'] == 'swag':
+        header = ['Epoch', 'Time', 'LR', 'Train RMSE', 'Valid RMSE', 'Test RMSE', 'Train SWAG RMSE', 'Valid SWAG RMSE', 'Test SWAG RMSE', 'PNorm', 'GNorm']
+    elif this_dic['uncertainty'] and this_dic['uncertainty_method'] == 'dropout':
+        header = ['Epoch', 'Time', 'LR', 'Train Loss', 'Train RMSE', 'Valid Loss', 'Valid RMSE', 'Test Loss', 'Test RMSE', 'PNorm', 'GNorm']
+    #elif this_dic['model'] in ['VAE', 'TransformerUnsuper']:
+        #    header = 'Epoch' + '\t' + 'Time' + '\t' + 'LR' + '\t' + 'Train Loss' + '\t' + 'Valid Loss' + '\t' + 'Test Loss' + '\t' + 'PNorm'+ '\t' + 'GNorm' + '\n'
+    else:
+        header = ['Epoch', 'Time', 'LR', 'Train RMSE', 'Valid RMSE', 'Test RMSE', 'PNorm', 'GNorm']
+    x = PrettyTable(header)
+    return x 
 
-def saveToResultsFile(this_dic, contents, name='data.txt'):
+def saveToResultsFile(table, this_dic, name='data.txt'):
 
-    assert os.path.exists(os.path.join(this_dic['running_path'], name))
-    #torch.save(contents[0].state_dict(), os.path.join(this_dic['running_path'], 'trained_model', 'model_'+str(contents[1])+'.pt'))
-
+    #assert os.path.exists(os.path.join(this_dic['running_path'], name))
+    #torch.save(contents[0].state_dict(), os.path.join(this_dic['running_path'], 'trained_model', 'model_'+str(contents[1])+'.pt')
     if this_dic['model'].endswith('dropout'):
         assert len(contents) == 12
         with open(os.path.join(this_dic['running_path'], 'data.txt'), 'a') as f1:
@@ -204,11 +204,8 @@ def saveToResultsFile(this_dic, contents, name='data.txt'):
             f1.write(str(contents[1]) + '\t' + str(round(contents[2]-contents[3], 2)) + '\t' + str(round(contents[4], 7)) + '\t' + str(round(contents[5], 7)) + '\t' + str(round(contents[6], 7)) + '\t' +  str(round(contents[7], 7)) + '\t' +  str(round(contents[8], 7)) + '\t' +  str(round(contents[9], 7)) + '\t' + str(contents[10]) + '\t' + str(contents[11]) + '\n')     
 
     if this_dic['model'] in ['1-GNN', '1-2-GNN', '1-efgs-GNN', '1-2-efgs-GNN', '1-interaction-GNN', 'Roberta']: # 1-2-GNN, loopybp, wlkernel
-        assert len(contents) == 8
-        with open(os.path.join(this_dic['running_path'], 'data.txt'), 'a') as f1:
-            f1.write(str(contents[0]) + '\t' + '{:0.3e}'.format(contents[1]) + '\t' + '{:0.3e}'.format(contents[2]) + '\t' + \
-                '{:0.3e}'.format(contents[3]) + '\t' + '{:0.3e}'.format(contents[4]) + '\t' + '{:0.3e}'.format(contents[5]) + '\t' \
-                    + '{:0.3e}'.format(contents[6]) + '\t' + '{:0.3e}'.format(contents[7]) + '\n')
+        with open(os.path.join(this_dic['running_path'], 'data.txt'), 'w') as f1:
+            f1.write(str(table))
 
 def saveConfig(this_dic, name='config.json'):
     all_ = {'data_config': {key:this_dic[key] for key in data_config if key in this_dic.keys()},
@@ -247,3 +244,16 @@ def saveModel(config, epoch, model, bestValError, valError, swag_model=None):
 class objectview(object):
     def __init__(self, d):
         self.__dict__ = d
+
+def prettyTableToPandas(f):
+    with open(f, 'r') as f:
+        l = f.readlines()
+    
+    contents = [] 
+    for line in l:
+        if line.startswith('+'):
+            continue
+        contents.append(line.split('|')[1:-1])
+        
+    df = pd.DataFrame(contents[1:], columns=contents[0])
+    return df

@@ -81,7 +81,7 @@ def main():
         os.makedirs(os.path.join(args.running_path, 'trained_model/'))
     if not os.path.exists(os.path.join(args.running_path, 'best_model/')):
         os.makedirs(os.path.join(args.running_path, 'best_model/'))
-    createResultsFile(this_dic, name='data.txt')
+    results = createResultsFile(this_dic) # create pretty table
 
     # define path to load data for different training tasks
     if args.style == 'base': 
@@ -150,11 +150,11 @@ def main():
         this_dic['epochs'] = 1
         model_.eval()
     for epoch in range(1, this_dic['epochs']+1):
-        saveContents = []
+        #contents = []
         time_tic = time.time() # starting time
         lr = scheduler.optimizer.param_groups[0]['lr']
         if not args.OnlyPrediction:
-            loss = train(model_, optimizer, train_loader, this_dicq)
+            loss = train(model_, optimizer, train_loader, this_dic)
         else:
             loss = 0.
         time_toc = time.time() # ending time 
@@ -171,9 +171,10 @@ def main():
             scheduler.step(val_error)
 
         if not this_dic['uncertainty']:
-            saveContents.append([epoch, time_toc-time_tic, lr, train_error,  \
-                val_error, test_error, param_norm(model_), grad_norm(model_)])
-            saveToResultsFile(this_dic, saveContents[0], name='data.txt')
+            contents = [epoch, round(time_toc-time_tic, 2), round(lr,7), round(train_error,3),  \
+                round(val_error,3), round(test_error,3), round(param_norm(model_),2), round(grad_norm(model_),2)]
+            results.add_row(contents)
+            saveToResultsFile(results, this_dic, name='data.txt')
             best_val_error = saveModel(this_dic, epoch, model_.gnn, best_val_error, val_error) # save model if validation error hits new lower 
     torch.save(model.state_dict(), os.path.join(this_dic['running_path'], 'trained_model', 'model_last.pt'))
 
