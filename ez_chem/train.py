@@ -123,15 +123,10 @@ def main():
         model = init_weights(model, this_dic)
     if this_dic['train_type'] in ['finetuning', 'transfer']:
         model.from_pretrained(args.preTrainedPath) # load weights for encoders 
-    
     if this_dic['train_type'] == 'transfer': # freeze encoder layers
-        if this_dic['model'] in ['1-GNN']:
-            for params in model.gnn.parameters():
-                params.requires_grad = False
-        if this_dic['model'] in ['1-2-GNN']:
-            for params in model.gnn.parameters():
-                params.requires_grad = False
-    
+        for params in model.gnn.parameters():
+            params.requires_grad = False
+
     # count total # of trainable params
     this_dic['NumParas'] = count_parameters(model)
     # save out all input parameters 
@@ -154,7 +149,7 @@ def main():
         time_tic = time.time() # starting time
         lr = scheduler.optimizer.param_groups[0]['lr']
         if not args.OnlyPrediction:
-            loss = train(model_, optimizer, train_loader, this_dic)
+            loss = train(model_, optimizer, train_loader, this_dic) # training loss
         else:
             loss = 0.
         time_toc = time.time() # ending time 
@@ -173,8 +168,8 @@ def main():
         if not this_dic['uncertainty']:
             contents = [epoch, round(time_toc-time_tic, 2), round(lr,7), round(train_error,3),  \
                 round(val_error,3), round(test_error,3), round(param_norm(model_),2), round(grad_norm(model_),2)]
-            results.add_row(contents)
-            saveToResultsFile(results, this_dic, name='data.txt')
+            results.add_row(contents) # updating pretty table 
+            saveToResultsFile(results, this_dic, name='data.txt') # save instant data to directory
             best_val_error = saveModel(this_dic, epoch, model_.gnn, best_val_error, val_error) # save model if validation error hits new lower 
     torch.save(model.state_dict(), os.path.join(this_dic['running_path'], 'trained_model', 'model_last.pt'))
 
