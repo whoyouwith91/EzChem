@@ -13,6 +13,7 @@ def parse_input_arguments():
     parser.add_argument('--dataset', type=str)
     parser.add_argument('--format', type=str, default='graphs')
     parser.add_argument('--model', type=str)
+    parser.add_argument('--usePeriodics', action=store_true)
     parser.add_argument('--save_path', type=str, default='/scratch/dz1061/gcn/chemGraph/data/')
     parser.add_argument('--style', type=str, help='it is for base or different experiments')
     return parser.parse_args()
@@ -61,8 +62,8 @@ def main():
                     for idx, smi, tar in zip(range(all_data.shape[0]), all_data['SMILES'], all_data['target']):
                         molgraphs = {}
                     
-                        mol_graph = MolGraph(smi, this_dic['model'])
-                        molgraphs['x'] = torch.FloatTensor(mol_graph.f_atoms)
+                        mol_graph = MolGraph(smi, args.usePeriodics, this_dic['model'])
+                        molgraphs['x'] = torch.FloatTensor(mol_graph.f_atoms) 
                         molgraphs['edge_attr'] = torch.FloatTensor(mol_graph.real_f_bonds)
                         molgraphs['edge_index'] = torch.LongTensor(np.concatenate([mol_graph.at_begin, mol_graph.at_end]).reshape(2,-1))
                         molgraphs['y'] = torch.FloatTensor([tar])
@@ -72,7 +73,7 @@ def main():
                     for idx, smi, tar1, tar2, tar3 in zip(range(all_data.shape[0]), all_data['SMILES'], all_data['target1'], all_data['target2'], all_data['target3']):
                         molgraphs = {}
 
-                        mol_graph = MolGraph(smi, this_dic['model'])
+                        mol_graph = MolGraph(smi, args.usePeriodics, this_dic['model'])
                         molgraphs['x'] = torch.FloatTensor(mol_graph.f_atoms)
                         molgraphs['edge_attr'] = torch.FloatTensor(mol_graph.real_f_bonds)
                         molgraphs['edge_index'] = torch.LongTensor(np.concatenate([mol_graph.at_begin, mol_graph.at_end]).reshape(2,-1))
@@ -91,7 +92,7 @@ def main():
                 for idx, smi, tar1, tar2, tar3 in zip(range(all_data.shape[0]), all_data['SMILES'], all_data['target1'], all_data['target2'], all_data['target3']):
                         molgraphs = {}
                         
-                        mol_graph = MolGraph(smi, this_dic['model'])
+                        mol_graph = MolGraph(smi, args.usePeriodics, this_dic['model'])
                         molgraphs['x'] = torch.FloatTensor(mol_graph.f_atoms)
                         molgraphs['edge_attr'] = torch.FloatTensor(mol_graph.real_f_bonds)
                         molgraphs['edge_index'] = torch.LongTensor(np.concatenate([mol_graph.at_begin, mol_graph.at_end]).reshape(2,-1))
@@ -110,7 +111,7 @@ def main():
                 for idx, smi, tar in zip(range(all_data.shape[0]), all_data['SMILES'], all_data['target']):
                     molgraphs = {}
                     
-                    mol_graph = MolGraph(smi, this_dic['model'])
+                    mol_graph = MolGraph(smi, args.usePeriodics, this_dic['model'])
                     molgraphs['x'] = torch.FloatTensor(mol_graph.f_atoms)
                     molgraphs['edge_attr'] = torch.FloatTensor(mol_graph.real_f_bonds)
                     molgraphs['edge_index'] = torch.LongTensor(np.concatenate([mol_graph.at_begin, mol_graph.at_end]).reshape(2,-1))
