@@ -154,7 +154,7 @@ def main():
         time_tic = time.time() # starting time
         lr = scheduler.optimizer.param_groups[0]['lr']
         if not args.OnlyPrediction:
-            loss = train(model_, optimizer, train_loader, this_dic)
+            loss = train(model_, optimizer, train_loader, this_dicq)
         else:
             loss = 0.
         time_toc = time.time() # ending time 

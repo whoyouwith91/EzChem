@@ -206,9 +206,9 @@ def saveToResultsFile(this_dic, contents, name='data.txt'):
     if this_dic['model'] in ['1-GNN', '1-2-GNN', '1-efgs-GNN', '1-2-efgs-GNN', '1-interaction-GNN', 'Roberta']: # 1-2-GNN, loopybp, wlkernel
         assert len(contents) == 8
         with open(os.path.join(this_dic['running_path'], 'data.txt'), 'a') as f1:
-            f1.write(str(contents[0]) + '\t' + str(round(contents[1], 2)) + '\t' + str(round(contents[2], 7)) + '\t' + \
-                str(round(contents[3], 7)) + '\t' + str(round(contents[4], 7)) + '\t' + str(round(contents[5], 7)) + '\t' \
-                    + str(contents[6]) + '\t' + str(contents[7]) + '\n')
+            f1.write(str(contents[0]) + '\t' + '{:0.3e}'.format(contents[1]) + '\t' + '{:0.3e}'.format(contents[2]) + '\t' + \
+                '{:0.3e}'.format(contents[3]) + '\t' + '{:0.3e}'.format(contents[4]) + '\t' + '{:0.3e}'.format(contents[5]) + '\t' \
+                    + '{:0.3e}'.format(contents[6]) + '\t' + '{:0.3e}'.format(contents[7]) + '\n')
 
 def saveConfig(this_dic, name='config.json'):
     all_ = {'data_config': {key:this_dic[key] for key in data_config if key in this_dic.keys()},
