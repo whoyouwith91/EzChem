@@ -9,11 +9,6 @@ from torch_geometric.nn.inits import glorot, zeros
 from helper import *
 from layers import *
 
-num_atom_features = 40 #including the extra mask tokens
-
-num_bond_type = 6 #including aromatic and self-loop edge, and extra masked tokens
-num_bond_direction = 3
-
 def get_model(config):
     name = config['model']
     if name == None:
@@ -37,7 +32,7 @@ def get_model(config):
     
 class GNN(torch.nn.Module):
     """
-    
+    Basic GNN unit modoule.
     Args:
         num_layer (int): the number of GNN layers
         emb_dim (int): dimensionality of embeddings
@@ -57,13 +52,13 @@ class GNN(torch.nn.Module):
         self.JK = config['JK']
         self.gnn_type = config['gnn_type']
         self.aggregate = config['aggregate']
+        self.num_atom_features = config['num_atom_features']
 
         if self.num_layer < 2:
             raise ValueError("Number of GNN layers must be greater than 1.")
 
-        self.x_embedding1 = torch.nn.Sequential(torch.nn.Linear(num_atom_features, self.emb_dim), torch.nn.ReLU())
+        self.x_embedding1 = torch.nn.Sequential(torch.nn.Linear(self.num_atom_features, self.emb_dim), torch.nn.ReLU())
 
-        ###List of MLPs
         self.gnns = torch.nn.ModuleList()
         for _ in range(self.num_layer):
             if self.gnn_type == "gin":

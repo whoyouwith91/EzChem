@@ -107,8 +107,8 @@ def main():
 
     # load processed data 
     loader = get_data_loader(this_dic)
-    train_loader, val_loader, test_loader, std, num_features, num_bond_features, num_i_2 = loader.train_loader, loader.val_loader, loader.test_loader, loader.std, loader.num_features, loader.num_bond_features, loader.num_i_2
-    this_dic['num_features'], this_dic['num_bond_features'], this_dic['num_i_2'], this_dic['std'] = int(num_features), num_bond_features, num_i_2, std
+    train_loader, val_loader, test_loader, std, num_atom_features, num_bond_features, num_i_2 = loader.train_loader, loader.val_loader, loader.test_loader, loader.std, loader.num_features, loader.num_bond_features, loader.num_i_2
+    this_dic['num_atom_features'], this_dic['num_bond_features'], this_dic['num_i_2'], this_dic['std'] = int(num_atom_features), num_bond_features, num_i_2, std
     this_dic['train_size'], this_dic['val_size'], this_dic['test_size'] = len(train_loader.dataset), len(val_loader.dataset), len(test_loader.dataset)
 
     # for special cases 
