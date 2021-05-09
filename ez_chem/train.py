@@ -1,14 +1,5 @@
 import argparse, time, os 
-
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
-import torch.optim as optim
-
-#from tensorboardX import SummaryWriter
-from tqdm import tqdm
-##from loader import *
-#from loader import MoleculeDataset
 from helper import *
 from data import *
 from trainer import *
@@ -145,9 +136,11 @@ def main():
         this_dic['epochs'] = 1
         model_.eval()
     for epoch in range(1, this_dic['epochs']+1):
-        #contents = []
         time_tic = time.time() # starting time
-        lr = scheduler.optimizer.param_groups[0]['lr']
+        if this_dic['lr_style'] == 'decay':
+            lr = scheduler.optimizer.param_groups[0]['lr']
+        else:
+            lr = args.lr
         if not args.OnlyPrediction:
             loss = train(model_, optimizer, train_loader, this_dic) # training loss
         else:

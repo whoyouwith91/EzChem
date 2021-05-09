@@ -13,7 +13,7 @@ def parse_input_arguments():
     parser.add_argument('--dataset', type=str)
     parser.add_argument('--format', type=str, default='graphs')
     parser.add_argument('--model', type=str)
-    parser.add_argument('--usePeriodics', action=store_true)
+    parser.add_argument('--usePeriodics', action='store_true')
     parser.add_argument('--save_path', type=str, default='/scratch/dz1061/gcn/chemGraph/data/')
     parser.add_argument('--style', type=str, help='it is for base or different experiments')
     return parser.parse_args()
