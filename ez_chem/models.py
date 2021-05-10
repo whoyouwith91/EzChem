@@ -245,7 +245,7 @@ class GNN_1(torch.nn.Module):
                 MolEmbed = self.pool(node_representation, batch)
         if self.propertyLevel == 'atom':
             MolEmbed = node_representation 
-        if model.training: # for TSNE analysis
+        if not model.training: # for TSNE analysis
             return node_representation, MolEmbed
 
         # read-out layers
@@ -364,7 +364,7 @@ class GNN_1_2(torch.nn.Module):
         x_2 = scatter_mean(x, batch_2, dim=0)   # to add stability to models
         
         MolEmbed = torch.cat([x_1, x_2], dim=1)
-        if model.training: # for TSNE analysis
+        if not model.training: # for TSNE analysis
             return node_representation, MolEmbed
 
         #MolEmbed = self.batch_norm(MolEmbed)
