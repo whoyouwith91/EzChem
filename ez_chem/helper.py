@@ -16,7 +16,7 @@ import numpy as np
 data_config = ['dataset', 'normalize', 'style', 'data_path', 'EFGS', 'efgs_lenth', 'num_i_2']
 model_config = ['model', 'gnn_type',  'batch_size', 'emb_dim', 'act_fn' , 'weights', 'num_atom_features', \
          'num_bond_features', 'pooling', 'NumParas', 'num_layer', 'JK', 'NumOutLayers', 'aggregate', \
-             'residual_connect', 'resLayer', 'interaction_simpler', 'weight_regularizer', 'dropout_regularizer', 'gradCam']
+             'residual_connect', 'resLayer', 'interaction_simpler', 'weight_regularizer', 'dropout_regularizer', 'gradCam', 'drop_ratio']
 train_config = ['running_path', 'seed', 'num_tasks', 'propertyLevel', 'optimizer', 'loss', 'metrics', 'lr', 'lr_style', \
          'epochs', 'early_stopping', 'train_type', 'taskType', 'train_size', 'val_size', 'test_size', \
          'preTrainedPath', 'uncertainty', 'uncertaintyMode', 'swag_start']
@@ -236,7 +236,7 @@ def saveModel(config, epoch, model, bestValError, valError, swag_model=None):
         if bestValError > np.sum(valError):
             bestValError = np.sum(valError)
             #logging.info('Saving models...')
-            torch.save(model.state_dict(), os.path.join(config['running_path'], 'best_model', 'model_'+str(epoch)+'.pt'))
+            torch.save(model.state_dict(), os.path.join(config['running_path'], 'best_model', 'model_best.pt'))
             if config['model'].endswith('swag'):
                 torch.save(swag_model.state_dict(), os.path.join(config['running_path'], 'best_model', 'swag_model_'+str(epoch)+'.pt'))
     return bestValError

@@ -245,7 +245,7 @@ class GNN_1(torch.nn.Module):
                 MolEmbed = self.pool(node_representation, batch)
         if self.propertyLevel == 'atom':
             MolEmbed = node_representation 
-        if not model.training: # for TSNE analysis
+        if not self.training: # for TSNE analysis
             return node_representation, MolEmbed
 
         # read-out layers
@@ -364,7 +364,7 @@ class GNN_1_2(torch.nn.Module):
         x_2 = scatter_mean(x, batch_2, dim=0)   # to add stability to models
         
         MolEmbed = torch.cat([x_1, x_2], dim=1)
-        if not model.training: # for TSNE analysis
+        if not self.training: # for TSNE analysis
             return node_representation, MolEmbed
 
         #MolEmbed = self.batch_norm(MolEmbed)
@@ -587,7 +587,7 @@ class GNN_1_WithWater_simpler(torch.nn.Module):
             else:
                 self.pool = GlobalAttention(gate_nn = torch.nn.Linear(self.emb_dim, 1))
         elif self.graph_pooling[:-1][0] == "set2set":
-             set2set_iter = 2
+            set2set_iter = 2
             if self.JK == "concat":
                 self.pool = Set2Set((self.num_layer + 1) * self.emb_dim, set2set_iter)
             else:
