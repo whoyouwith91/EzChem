@@ -256,4 +256,6 @@ def prettyTableToPandas(f):
         contents.append(line.split('|')[1:-1])
         
     df = pd.DataFrame(contents[1:], columns=contents[0])
+    #df.colunms = [i.strip() for i in df.columns]
+    df = df.astype(float)
     return df
