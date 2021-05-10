@@ -54,7 +54,7 @@ def main():
     parser.add_argument('--experiment', type=str)  # when doing experimenting, name it. 
     parser.add_argument('--num_tasks', type=int, default=1)
     parser.add_argument('--propertyLevel', type=str, default='molecule')
-    
+    parser.add_argument('--gradCam', action='store_true')
     parser.add_argument('--uncertainty',  type=str)
     parser.add_argument('--uncertaintyMode',  type=str)
     parser.add_argument('--weight_regularizer', type=float, default=1e-6)

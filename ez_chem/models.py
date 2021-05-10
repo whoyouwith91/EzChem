@@ -53,12 +53,16 @@ class GNN(torch.nn.Module):
         self.gnn_type = config['gnn_type']
         self.aggregate = config['aggregate']
         self.num_atom_features = config['num_atom_features']
+        self.gradCam = config['gradCam']
+        self.act_fn = activation_func(config)
 
-        if self.num_layer < 2:
-            raise ValueError("Number of GNN layers must be greater than 1.")
-
+        if self.num_layer < 1:
+            raise ValueError("Number of GNN layers must be no less than 1.")
+        
+        # embed nodes
         self.x_embedding1 = torch.nn.Sequential(torch.nn.Linear(self.num_atom_features, self.emb_dim), torch.nn.ReLU())
 
+        # define graph conv layers
         self.gnns = torch.nn.ModuleList()
         for _ in range(self.num_layer):
             if self.gnn_type == "gin":
@@ -78,6 +82,20 @@ class GNN(torch.nn.Module):
         self.batch_norms = torch.nn.ModuleList()
         for _ in range(self.num_layer):
             self.batch_norms.append(torch.nn.BatchNorm1d(self.emb_dim))
+    
+        self.gradients = None # for GradCAM     
+
+    ## hook for the gradients of the activations GradCAM
+    def activations_hook(self, grad):
+        self.gradients = grad
+    
+    # method for the gradient extraction GradCAM
+    def get_activations_gradient(self):
+        return self.gradients
+    
+    # method for the activation exctraction
+    def get_activations(self, x):
+        return x
 
     #def forward(self, x, edge_index, edge_attr):
     def forward(self, *argv):
@@ -99,13 +117,16 @@ class GNN(torch.nn.Module):
                 if layer > self.config['resLayer']:
                     h += residual
             h = self.batch_norms[layer](h)
-            #h = F.dropout(F.relu(h), self.drop_ratio, training = self.training)
             if layer == self.num_layer - 1:
                 #remove relu for the last layer
                 h = F.dropout(h, self.drop_ratio, training = self.training)
+                self.last_conv = self.get_activations(h)
             else:
-                h = F.dropout(F.relu(h), self.drop_ratio, training = self.training)
+                h = self.act_fn(h)
+                h = F.dropout(h, self.drop_ratio, training = self.training)
             h_list.append(h)
+            if self.gradCam and layer == self.num_layer - 1:
+                h.register_hook(self.activations_hook)
             
         ### Different implementations of Jk-concat
         if self.JK == "concat":
@@ -157,7 +178,7 @@ class GNN_1(torch.nn.Module):
                 self.pool = GlobalAttention(gate_nn = torch.nn.Linear((self.num_layer + 1) * self.emb_dim, 1))
             else:
                 self.pool = GlobalAttention(gate_nn = torch.nn.Linear(self.emb_dim, 1))
-        elif self.graph_pooling[:-1][0] == "set2set":
+        elif self.graph_pooling == "set2set":
             set2set_iter = 2
             if self.JK == "concat":
                 self.pool = Set2Set((self.num_layer + 1) * self.emb_dim, set2set_iter)
@@ -192,7 +213,7 @@ class GNN_1(torch.nn.Module):
         self.outLayers.append(fc)
         for _ in range(self.NumOutLayers):
             L_in, L_out = self.outLayers[-1][0].out_features, int(self.outLayers[-1][0].out_features / 2)
-            fc = nn.Sequential(Linear(L_in, L_out), torch.nn.ReLU())
+            fc = nn.Sequential(Linear(L_in, L_out), activation_func(config))
             self.outLayers.append(fc)
             if self.uncertainty: # for uncertainty 
                 self.uncertaintyLayers.append(NNDropout(weight_regularizer=self.weight_regularizer, dropout_regularizer=self.dropout_regularizer)) 
@@ -202,7 +223,7 @@ class GNN_1(torch.nn.Module):
         if self.uncertaintyMode == 'epistemic': 
             self.drop_mu = NNDropout(weight_regularizer=self.weight_regularizer, dropout_regularizer=self.dropout_regularizer) # working on last layer
         if self.uncertaintyMode == 'aleatoric': # 
-            self.outLayers.append(last_fc)      
+            self.outLayers.append(last_fc)
 
     def from_pretrained(self, model_file):
         #self.gnn = GNN(self.num_layer, self.emb_dim, JK = self.JK, drop_ratio = self.drop_ratio)
@@ -210,9 +231,10 @@ class GNN_1(torch.nn.Module):
 
     def forward(self, data):
         x, edge_index, edge_attr, batch = data.x, data.edge_index, data.edge_attr.long(), data.batch
-        node_representation = self.gnn(x, edge_index, edge_attr)
+        node_representation = self.gnn(x, edge_index, edge_attr) # node updating 
 
-        if self.propertyLevel == 'molecule':
+        # graph pooling 
+        if self.propertyLevel == 'molecule': 
             if self.graph_pooling == 'conv':
                 MolEmbed_list = []
                 for p in self.pool:
@@ -223,7 +245,10 @@ class GNN_1(torch.nn.Module):
                 MolEmbed = self.pool(node_representation, batch)
         if self.propertyLevel == 'atom':
             MolEmbed = node_representation 
+        if model.training: # for TSNE analysis
+            return node_representation, MolEmbed
 
+        # read-out layers
         if not self.uncertainty:
             for layer in self.outLayers:
                 MolEmbed = layer(MolEmbed)
@@ -233,6 +258,7 @@ class GNN_1(torch.nn.Module):
                 return MolEmbed.view(-1,1), None
             else:
                 return MolEmbed.view(-1), None
+        # for uncertainty analysis
         else:
             for layer, drop in zip(self.outLayers[1:-1], self.uncertaintyLayers):
                 x, _ = drop(MolEmbed, layer)
@@ -243,6 +269,7 @@ class GNN_1(torch.nn.Module):
                 mean = self.outLayers[-2](x)
                 log_var = self.outLayers[-1](x)
                 return mean, log_var
+        
 
 class GNN_1_2(torch.nn.Module):
     def __init__(self, config):
@@ -258,9 +285,8 @@ class GNN_1_2(torch.nn.Module):
         self.gnn = GNN(config)
         self.convISO1 = GraphConv(self.emb_dim + self.num_i_2, self.emb_dim)
         self.convISO2 = GraphConv(self.emb_dim, self.emb_dim)
-
         self.outLayers = nn.ModuleList()
-        self.out_batch_norms = torch.nn.ModuleList()
+        #self.out_batch_norms = torch.nn.ModuleList()
 
         #Different kind of graph pooling
         if self.graph_pooling == "sum":
@@ -274,8 +300,8 @@ class GNN_1_2(torch.nn.Module):
                 self.pool = GlobalAttention(gate_nn = torch.nn.Linear((self.num_layer + 1) * self.emb_dim, 1))
             else:
                 self.pool = GlobalAttention(gate_nn = torch.nn.Linear(self.emb_dim, 1))
-        elif self.graph_pooling[:-1][0] == "set2set":
-            set2set_iter = int(self.graph_pooling[-1])
+        elif self.graph_pooling == "set2set":
+            set2set_iter = 2
             if self.JK == "concat":
                 self.pool = Set2Set((self.num_layer + 1) * self.emb_dim, set2set_iter)
             else:
@@ -296,12 +322,12 @@ class GNN_1_2(torch.nn.Module):
         #self.batch_norm = torch.nn.BatchNorm1d(L_in)
         fc = nn.Sequential(Linear(L_in, L_out), nn.ReLU())
         self.outLayers.append(fc)
-        self.out_batch_norms.append(torch.nn.BatchNorm1d(L_out))
+        #self.out_batch_norms.append(torch.nn.BatchNorm1d(L_out))
         for _ in range(self.NumOutLayers):
             L_in, L_out = self.outLayers[-1][0].out_features, int(self.outLayers[-1][0].out_features / 2)
-            fc = nn.Sequential(Linear(L_in, L_out), torch.nn.ReLU())
+            fc = nn.Sequential(Linear(L_in, L_out), activation_func(config))
             self.outLayers.append(fc)
-            self.out_batch_norms.append(torch.nn.BatchNorm1d(L_out))
+            #self.out_batch_norms.append(torch.nn.BatchNorm1d(L_out))
         last_fc = nn.Linear(L_out, self.num_tasks)
         self.outLayers.append(last_fc)
 
@@ -338,6 +364,9 @@ class GNN_1_2(torch.nn.Module):
         x_2 = scatter_mean(x, batch_2, dim=0)   # to add stability to models
         
         MolEmbed = torch.cat([x_1, x_2], dim=1)
+        if model.training: # for TSNE analysis
+            return node_representation, MolEmbed
+
         #MolEmbed = self.batch_norm(MolEmbed)
         for layer, out_norm in zip(self.outLayers[:-1], self.out_batch_norms):
              MolEmbed = layer(MolEmbed)
@@ -380,8 +409,8 @@ class GNN_1_EFGS(torch.nn.Module):
                 self.pool = GlobalAttention(gate_nn = torch.nn.Linear((self.num_layer + 1) * self.emb_dim, 1))
             else:
                 self.pool = GlobalAttention(gate_nn = torch.nn.Linear(self.emb_dim, 1))
-        elif self.graph_pooling[:-1][0] == "set2set":
-            set2set_iter = int(self.graph_pooling[-1])
+        elif self.graph_pooling == "set2set":
+            set2set_iter = 2
             if self.JK == "concat":
                 self.pool = Set2Set((self.num_layer + 1) * self.emb_dim, set2set_iter)
             else:
@@ -403,7 +432,7 @@ class GNN_1_EFGS(torch.nn.Module):
         self.outLayers.append(fc)
         for _ in range(self.NumOutLayers):
             L_in, L_out = self.outLayers[-1][0].out_features, int(self.outLayers[-1][0].out_features / 2)
-            fc = nn.Sequential(Linear(L_in, L_out), torch.nn.ReLU())
+            fc = nn.Sequential(Linear(L_in, L_out), activation_func(config))
             self.outLayers.append(fc)
         last_fc = nn.Linear(L_out, self.num_tasks)
         self.outLayers.append(last_fc)
@@ -474,8 +503,8 @@ class GNN_1_WithWater(torch.nn.Module):
                 self.pool = GlobalAttention(gate_nn = torch.nn.Linear((self.num_layer + 1) * self.emb_dim, 1))
             else:
                 self.pool = GlobalAttention(gate_nn = torch.nn.Linear(self.emb_dim, 1))
-        elif self.graph_pooling[:-1][0] == "set2set":
-            set2set_iter = int(self.graph_pooling[-1])
+        elif self.graph_pooling == "set2set":
+            set2set_iter = 2
             if self.JK == "concat":
                 self.pool = Set2Set((self.num_layer + 1) * self.emb_dim, set2set_iter)
             else:
@@ -498,7 +527,7 @@ class GNN_1_WithWater(torch.nn.Module):
         self.outLayers.append(fc)
         for _ in range(self.NumOutLayers):
             L_in, L_out = self.outLayers[-1][0].out_features, int(self.outLayers[-1][0].out_features / 2)
-            fc = nn.Sequential(Linear(L_in, L_out), torch.nn.ReLU())
+            fc = nn.Sequential(Linear(L_in, L_out), activation_func(config))
             self.outLayers.append(fc)
         last_fc = nn.Linear(L_out, self.num_tasks)
         self.outLayers.append(last_fc)
@@ -558,7 +587,7 @@ class GNN_1_WithWater_simpler(torch.nn.Module):
             else:
                 self.pool = GlobalAttention(gate_nn = torch.nn.Linear(self.emb_dim, 1))
         elif self.graph_pooling[:-1][0] == "set2set":
-            set2set_iter = int(self.graph_pooling[-1])
+             set2set_iter = 2
             if self.JK == "concat":
                 self.pool = Set2Set((self.num_layer + 1) * self.emb_dim, set2set_iter)
             else:
@@ -584,7 +613,7 @@ class GNN_1_WithWater_simpler(torch.nn.Module):
         self.outLayers.append(fc)
         for _ in range(self.NumOutLayers):
             L_in, L_out = self.outLayers[-1][0].out_features, int(self.outLayers[-1][0].out_features / 2)
-            fc = nn.Sequential(Linear(L_in, L_out), torch.nn.ReLU())
+            fc = nn.Sequential(Linear(L_in, L_out), activation_func(config))
             self.outLayers.append(fc)
         last_fc = nn.Linear(L_out, self.num_tasks)
         self.outLayers.append(last_fc)
