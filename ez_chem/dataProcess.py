@@ -93,6 +93,7 @@ class knnGraph(InMemoryDataset):
                 edge_index=d['edge_index'],
                 edge_attr=d['edge_attr'],
                 y=d['y'],
+                smiles=d['smiles'],
                 ids=d['id']
                 ) for d in raw_data_list
         ]
@@ -137,6 +138,7 @@ class knnGraph_nmr(InMemoryDataset):
                 edge_attr=d['edge_attr'],
                 y=d['y'],
                 mask=d['mask'],
+                smiles=d['smiles'],
                 ids=d['id']
                 ) for d in raw_data_list
         ]
@@ -183,7 +185,8 @@ class knnGraph_multi(InMemoryDataset):
                 y=d['y0'],
                 y1=d['y1'],
                 y2=d['y2'],
-                ids=d['id']
+                ids=d['id'],
+                smiles=d['smiles']
                 ) for d in raw_data_list
         ]
 
@@ -338,7 +341,8 @@ class knnGraph_WithWater(InMemoryDataset):
                 hyd_solute_x=hyd_solute['x'],
                 hyd_solute_edge_index=hyd_solute['edge_index'],
                 hyd_solute_edge_attr=hyd_solute['edge_attr'],
-                hyd_solute_mask=hyd_solute['mask']
+                hyd_solute_mask=hyd_solute['mask'],
+                smiles=d['smiles']
 
                 ) for solute, hyd_solute in zip(raw_solute_data, raw_hydrated_solute_data)
         ]

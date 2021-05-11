@@ -1,5 +1,11 @@
 ALLOWABLE_ATOM_SYMBOLS = ['H', 'C', 'N', 'O', 'S', 'F', 'I', 'P', 'Cl', 'Br']
 
+def mol_with_atom_index( mol ):
+    atoms = mol.GetNumAtoms()
+    for idx in range( atoms ):
+        mol.GetAtomWithIdx( idx ).SetProp( 'molAtomMapNumber', str( mol.GetAtomWithIdx( idx ).GetIdx() ) )
+    return mol
+    
 # filter out molecules that are within elements groups
 with open('/beegfs/dz1061/gcn/chemGraph/data/smiles/atom10_smiles.txt', 'w') as f:
     for i in text:
