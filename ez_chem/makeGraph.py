@@ -7,6 +7,8 @@ from featurization import *
 from sklearn.model_selection import train_test_split
 from mordred import Calculator, descriptors
 from rdkit import Chem
+from rdkit.Chem import Descriptors
+from rdkit.ML.Descriptors import MoleculeDescriptors
 
 def parse_input_arguments():
     parser = argparse.ArgumentParser(description='Physicochemical prediction')
@@ -133,12 +135,18 @@ def main():
                 print('Finishing processing {} compounds'.format(all_data.shape[0]))
     
     if this_dic['format'] == 'descriptors':
-        calc = Calculator(descriptors, ignore_3D=True)
+        descriptors = list(np.array(Descriptors._descList)[:,0])
+        calc = MoleculeDescriptors.MolecularDescriptorCalculator(descriptors)
         examples = []
         all_data = pd.concat([train_raw, valid_raw, test_raw])
-        for smi in all_data['SMILES']:
+        for smi,tar in zip(all_data['SMILES'], all_data['target']):
+            mols = {}
             mol = Chem.MolFromSmiles(smi)
-            examples.append(calc(mol)[1:])
+            #examples.append(calc(mol)[1:])
+            mols['descriptors'] = calc.CalcDescriptors(mol)
+            mols['y'] = tar
+
+            examples.append(mols)
         if not os.path.exists(os.path.join(this_dic['save_path'], args.dataset, args.format, args.style, this_dic['model'], 'raw')):
             os.makedirs(os.path.join(this_dic['save_path'], args.dataset, args.format, args.style, this_dic['model'], 'raw'))
         torch.save(examples, os.path.join(this_dic['save_path'], args.dataset, args.format, args.style, this_dic['model'], 'raw', 'temp.pt')) ###
