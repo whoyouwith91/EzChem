@@ -162,6 +162,7 @@ class GNN_1(torch.nn.Module):
         self.uncertaintyMode = config['uncertaintyMode']
         self.weight_regularizer = config['weight_regularizer']
         self.dropout_regularizer = config['dropout_regularizer']
+        self.features = config['mol_features']
 
         self.gnn = GNN(config)
         self.outLayers = nn.ModuleList()
@@ -205,8 +206,11 @@ class GNN_1(torch.nn.Module):
         
         if self.JK == "concat": # change readout layers input and output dimension
             L_in, L_out = self.mult * (self.num_layer + 1) * self.emb_dim, self.emb_dim
-        if self.graph_pooling == 'conv': # change readout layers input and output dimension
+        elif self.graph_pooling == 'conv': # change readout layers input and output dimension
             L_in = self.mult * self.emb_dim / 2, self.mult * self.emb_dim / 2
+        elif self.features:
+            if self.dataset == 'sol_calc/ALL': # 19 selected top mol descriptors 
+                L_in, L_out = self.mult * self.emb_dim + 19, self.emb_dim # 
         else: # change readout layers input and output dimension
             L_in, L_out = self.mult * self.emb_dim, self.emb_dim
 
@@ -246,6 +250,8 @@ class GNN_1(torch.nn.Module):
                 MolEmbed = self.pool(node_representation, batch)
         if self.propertyLevel == 'atom':
             MolEmbed = node_representation 
+        if self.features: # concatenating molecular features 
+            MolEmbed = torch.cat((MolEmbed, data.features), -1)
         if not self.training and not self.gradCam: # for TSNE analysis
             return node_representation, MolEmbed
 

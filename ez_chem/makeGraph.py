@@ -16,6 +16,7 @@ def parse_input_arguments():
     parser.add_argument('--format', type=str, default='graphs')
     parser.add_argument('--model', type=str)
     parser.add_argument('--usePeriodics', action='store_true')
+    parser.add_argument('--mol_features', action='store_true')
     parser.add_argument('--save_path', type=str, default='/scratch/dz1061/gcn/chemGraph/data/')
     parser.add_argument('--style', type=str, help='it is for base or different experiments')
     return parser.parse_args()
@@ -125,8 +126,17 @@ def main():
                         for k, v in tar[0].items():
                             mask[int(k), 0] = 1.0
                             vals[int(k), 0] = v
+                        molgraphs['y'] = torch.FloatTensor(vals).flatten()
+                        molgraphs['mask'] = torch.FloatTensor(mask).flatten()
                     if this_dic['dataset'] not in ['zinc', 'nmr']:
                         molgraphs['smiles'] = smi
+                    if this_dic['mol_features']:
+                        if this_dic['dataset'] == 'sol_calc/ALL':
+                            select_index_rdkit = [0, 36, 41, 46, 49, 50, 52, 58, 66, 78, 80, 81, 84, 95, 98, 103, 105, 112, 113]
+                            # select_descriptors = ['TPSA', 'RingCount', 'NOCount', 'NumHDonors', 'VSA_EState8', 'SlogP_VSA2', 'NumAliphaticHeterocycles', \
+                                                    #'MaxPartialCharge', 'VSA_EState9', 'PEOE_VSA8', 'BalabanJ', 'MolLogP', 'Kappa3', 'PEOE_VSA1', \
+                                                    #'NHOHCount', 'SlogP_VSA5', 'VSA_EState10', 'SMR_VSA3', 'BCUT2D_MRHI', 'SMR_VSA1']
+                            molgraphs['mol_features'] = torch.FloatTensor(np.array(rdkit_2d_normalized_features_generator(smi))[select_index_rdkit])
                     molgraphs['id'] = torch.FloatTensor([idx])
                     examples.append(molgraphs)
                 if not os.path.exists(os.path.join(this_dic['save_path'], args.dataset, args.format, args.style, this_dic['model'], 'raw')):

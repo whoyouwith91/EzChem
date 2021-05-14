@@ -33,6 +33,7 @@ def main():
     parser.add_argument('--num_workers', type=int, default = 8, help='number of workers for dataset loading')
     parser.add_argument('--model', type=str, default="1-GNN")
     parser.add_argument('--EFGS', action='store_true')
+    parser.add_argument('--mol_features', action='store_true')
     parser.add_argument('--residual_connect', action='store_true')
     parser.add_argument('--resLayer', type=int, default=-1)
     parser.add_argument('--interaction_simpler', action='store_true')

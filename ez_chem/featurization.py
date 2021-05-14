@@ -1,5 +1,6 @@
 from typing import List, Tuple, Union
 from rdkit import Chem
+from descriptastorus.descriptors import rdDescriptors, rdNormalizedDescriptors
 
 #__all__ = [get_atom_fdim, get_bond_fdim, MolGraph]
 
@@ -55,6 +56,16 @@ BOND_FEATURES = {
     ]
 }
 
+def rdkit_2d_normalized_features_generator(mol):
+        """
+        Generates RDKit 2D normalized features for a molecule.
+        :param mol: A molecule (i.e., either a SMILES or an RDKit molecule).
+        :return: A 1D numpy array containing the RDKit 2D normalized features.
+        """
+        smiles = Chem.MolToSmiles(mol, isomericSmiles=True) if type(mol) != str else mol
+        generator = rdNormalizedDescriptors.RDKit2DNormalized()
+        features = generator.process(smiles)[1:]
+        return features
 ######################## Define atom features and bond features ##############
 
 ##############################################################################

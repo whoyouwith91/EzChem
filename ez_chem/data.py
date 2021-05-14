@@ -81,6 +81,8 @@ class get_data_loader():
             dataset = knnGraph_multi(root=self.config['data_path'])
          elif self.config['dataset'] in ['qm9/nmr/carbon', 'qm9/nmr/carbon/smaller', 'qm9/nmr/hydrogen', 'qm9/nmr/allAtoms', 'nmr/hydrogen', 'nmr/carbon']:
             dataset = knnGraph_nmr(root=self.config['data_path'])
+         elif self.config['mol_features']:
+            dataset = knnGraph_mol(root=self.config['data_path'])
          else:
             dataset = knnGraph(root=self.config['data_path'])
             num_i_2 = None
