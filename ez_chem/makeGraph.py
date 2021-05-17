@@ -132,13 +132,19 @@ def main():
                         molgraphs['smiles'] = smi
                     if this_dic['mol_features']:
                         if this_dic['dataset'] == 'sol_calc/ALL':
-                            select_index_rdkit = [0, 36, 41, 46, 49, 50, 52, 58, 66, 78, 80, 81, 84, 95, 98, 103, 105, 112, 113]
+                            #select_index_rdkit = [0, 36, 41, 46, 49, 50, 52, 58, 66, 78, 80, 81, 84, 95, 98, 103, 105, 112, 113]
                             # select_descriptors = ['TPSA', 'RingCount', 'NOCount', 'NumHDonors', 'VSA_EState8', 'SlogP_VSA2', 'NumAliphaticHeterocycles', \
                                                     #'MaxPartialCharge', 'VSA_EState9', 'PEOE_VSA8', 'BalabanJ', 'MolLogP', 'Kappa3', 'PEOE_VSA1', \
                                                     #'NHOHCount', 'SlogP_VSA5', 'VSA_EState10', 'SMR_VSA3', 'BCUT2D_MRHI', 'SMR_VSA1']
-                            molgraphs['mol_features'] = torch.FloatTensor(np.array(rdkit_2d_normalized_features_generator(smi))[select_index_rdkit])
+                            select_index_rdkit = range(200)
+                            features = np.array(rdkit_2d_normalized_features_generator(smi))[select_index_rdkit]
+                            molgraphs['mol_features'] = torch.FloatTensor(features)
                     molgraphs['id'] = torch.FloatTensor([idx])
                     examples.append(molgraphs)
+                if this_dic['mol_features']:
+                    new_examples = [d for d in examples if not np.isnan(np.sum(d['mol_features'].numpy()))]
+                    examples = new_examples
+   
                 if not os.path.exists(os.path.join(this_dic['save_path'], args.dataset, args.format, args.style, this_dic['model'], 'raw')):
                     os.makedirs(os.path.join(this_dic['save_path'], args.dataset, args.format, args.style, this_dic['model'], 'raw'))
                 torch.save(examples, os.path.join(this_dic['save_path'], args.dataset, args.format, args.style, this_dic['model'], 'raw', 'temp.pt')) ###
@@ -155,8 +161,19 @@ def main():
             #examples.append(calc(mol)[1:])
             mols['descriptors'] = calc.CalcDescriptors(mol)
             mols['y'] = tar
-
+            if this_dic['mol_features']:
+                if this_dic['dataset'] == 'sol_calc/ALL':
+                    select_index_rdkit = [0, 36, 41, 46, 49, 50, 52, 58, 66, 78, 80, 81, 84, 95, 98, 103, 105, 112, 113]
+                    # select_descriptors = ['TPSA', 'RingCount', 'NOCount', 'NumHDonors', 'VSA_EState8', 'SlogP_VSA2', 'NumAliphaticHeterocycles', \
+                                            #'MaxPartialCharge', 'VSA_EState9', 'PEOE_VSA8', 'BalabanJ', 'MolLogP', 'Kappa3', 'PEOE_VSA1', \
+                                            #'NHOHCount', 'SlogP_VSA5', 'VSA_EState10', 'SMR_VSA3', 'BCUT2D_MRHI', 'SMR_VSA1']
+                    features = np.array(rdkit_2d_normalized_features_generator(smi))[select_index_rdkit]
+                    molgraphs['mol_features'] = torch.FloatTensor(features)
             examples.append(mols)
+        if this_dic['mol_features']:
+            new_examples = [d for d in examples if not np.isnan(np.sum(d['mol_features'].numpy()))]
+            examples = new_examples
+
         if not os.path.exists(os.path.join(this_dic['save_path'], args.dataset, args.format, args.style, this_dic['model'], 'raw')):
             os.makedirs(os.path.join(this_dic['save_path'], args.dataset, args.format, args.style, this_dic['model'], 'raw'))
         torch.save(examples, os.path.join(this_dic['save_path'], args.dataset, args.format, args.style, this_dic['model'], 'raw', 'temp.pt')) ###

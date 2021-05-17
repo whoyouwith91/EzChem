@@ -15,7 +15,7 @@ import numpy as np
 ################### Configuration setting names ############################
 data_config = ['dataset', 'model', 'normalize', 'style', 'data_path', 'EFGS', 'efgs_lenth', 'num_i_2', 'train_size', 'val_size', 'batch_size']
 model_config = ['dataset', 'model', 'gnn_type',  'batch_size', 'emb_dim', 'act_fn' , 'weights', 'num_atom_features', 'num_tasks', 'propertyLevel', \
-         'num_bond_features', 'pooling', 'NumParas', 'num_layer', 'JK', 'NumOutLayers', 'aggregate', \
+         'num_bond_features', 'pooling', 'NumParas', 'num_layer', 'JK', 'NumOutLayers', 'aggregate', 'mol_features', \
              'residual_connect', 'resLayer', 'interaction_simpler', 'weight_regularizer', 'dropout_regularizer', 'gradCam', 'uncertainty', 'uncertaintyMode', 'drop_ratio']
 train_config = ['running_path', 'seed', 'num_tasks', 'propertyLevel', 'optimizer', 'loss', 'metrics', 'lr', 'lr_style', \
          'epochs', 'early_stopping', 'train_type', 'taskType', 'train_size', 'val_size', 'test_size', \

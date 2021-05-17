@@ -1,9 +1,19 @@
 import sys, os
 import torch
+import numpy as np
+import pandas as pd
 import xgboost
 from xgboost import XGBRegressor
 from sklearn.metrics import mean_squared_error
 from prettytable import PrettyTable
+import torch
+from torch import nn
+import torch.nn as nn
+from torch.utils.data import DataLoader, TensorDataset
+from torchvision import datasets, transforms
+from torchvision.transforms import ToTensor, Lambda, Compose
+import torch.nn.functional as F
+from sklearn.preprocessing import StandardScaler
 
 class descriptorLoader():
     def __init__(self, config):
@@ -80,7 +90,7 @@ def train(model, loader, device):
 
         loss.backward()
         optimizer.step()
-    return (all_loss / len(loader.dataset)).sqrt()
+    return np.sqrt(all_loss / len(loader.dataset))
         
         
 def test(model, loader, device):
@@ -105,7 +115,7 @@ descriptors = list(np.array(Descriptors._descList)[:,0])
 
 loader = descriptorLoader(config)
 loader.transform()
-used_descriptors = torch.load()
+used_descriptors = ['MinEStateIndex', 'HeavyAtomMolWt', 'NumRadicalElectrons', 'MaxAbsPartialCharge', 'FpDensityMorgan3', 'BCUT2D_MWLOW', 'BCUT2D_CHGLO', 'BCUT2D_MRHI', 'BalabanJ', 'Kappa3', 'PEOE_VSA10', 'PEOE_VSA11', 'PEOE_VSA12', 'PEOE_VSA13', 'PEOE_VSA3', 'PEOE_VSA4', 'PEOE_VSA5', 'PEOE_VSA8', 'PEOE_VSA9', 'SMR_VSA8', 'SlogP_VSA11', 'SlogP_VSA2', 'SlogP_VSA3', 'SlogP_VSA4', 'SlogP_VSA5', 'SlogP_VSA7', 'SlogP_VSA9', 'EState_VSA11', 'EState_VSA2', 'EState_VSA3', 'EState_VSA4', 'EState_VSA5', 'EState_VSA6', 'EState_VSA8', 'VSA_EState4', 'VSA_EState5', 'VSA_EState7', 'VSA_EState8', 'VSA_EState9', 'NumRotatableBonds', 'fr_ArN', 'fr_Ar_COO', 'fr_COO', 'fr_C_S', 'fr_HOCCN', 'fr_Imine', 'fr_NH2', 'fr_N_O', 'fr_Ndealkylation1', 'fr_Ndealkylation2', 'fr_Nhpyrrole', 'fr_SH', 'fr_aldehyde', 'fr_alkyl_carbamate', 'fr_allylic_oxid', 'fr_amidine', 'fr_aniline', 'fr_aryl_methyl', 'fr_azide', 'fr_azo', 'fr_barbitur', 'fr_benzodiazepine', 'fr_bicyclic', 'fr_diazo', 'fr_dihydropyridine', 'fr_epoxide', 'fr_ester', 'fr_ether', 'fr_furan', 'fr_guanido', 'fr_hdrzine', 'fr_hdrzone', 'fr_imidazole', 'fr_imide', 'fr_isocyan', 'fr_isothiocyan', 'fr_ketone_Topliss', 'fr_lactam', 'fr_lactone', 'fr_methoxy', 'fr_morpholine', 'fr_nitrile', 'fr_nitro', 'fr_nitro_arom', 'fr_nitro_arom_nonortho', 'fr_nitroso', 'fr_oxazole', 'fr_oxime', 'fr_para_hydroxylation', 'fr_phenol', 'fr_phos_ester', 'fr_piperdine', 'fr_piperzine', 'fr_priamide', 'fr_prisulfonamd', 'fr_pyridine', 'fr_quatN', 'fr_sulfide', 'fr_sulfonamd', 'fr_sulfone', 'fr_tetrazole', 'fr_thiazole', 'fr_thiocyan', 'fr_thiophene']
 X_all_use = loader.X_all[used_descriptors]
 
 loader.X_all = X_all_use
@@ -129,7 +139,7 @@ x = PrettyTable(header)
 for epoch in range(300):
     lr = 0.001
     train_rmse = train(model, train_loader, device)
-    valid_rmse = (test(model, valid_loader, device)
+    valid_rmse = test(model, valid_loader, device)
     test_rmse = test(model, test_loader, device)
     x.add_row([str(epoch), lr, train_rmse, valid_rmse, test_rmse])
     print(x)

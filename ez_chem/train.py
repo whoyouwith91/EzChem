@@ -48,7 +48,7 @@ def main():
     parser.add_argument('--loss', type=str, choices=['l1', 'l2', 'smooth_l1', 'dropout', 'vae', 'unsuper', 'maskedL2'])
     parser.add_argument('--metrics', type=str, choices=['l1', 'l2'])
     parser.add_argument('--weights', type=str, choices=['he_norm', 'xavier_norm', 'he_uni', 'xavier_uni'], default='he_uni')
-    parser.add_argument('--act_fn', type=str)
+    parser.add_argument('--act_fn', type=str, default='relu')
     parser.add_argument('--lr_style', type=str, choices=['constant', 'decay']) # now is exponential decay on valid loss
     parser.add_argument('--optimizer',  type=str, choices=['adam', 'sgd', 'swa'])
     parser.add_argument('--style', type=str, choices=['base', 'CV', 'preTraining'])  # if running CV
@@ -57,6 +57,7 @@ def main():
     parser.add_argument('--num_tasks', type=int, default=1)
     parser.add_argument('--propertyLevel', type=str, default='molecule')
     parser.add_argument('--gradCam', action='store_true')
+    parser.add_argument('--tsne', action='store_true')
     parser.add_argument('--uncertainty',  type=str)
     parser.add_argument('--uncertaintyMode',  type=str)
     parser.add_argument('--weight_regularizer', type=float, default=1e-6)

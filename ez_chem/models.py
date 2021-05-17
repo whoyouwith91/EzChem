@@ -158,6 +158,7 @@ class GNN_1(torch.nn.Module):
         self.propertyLevel = config['propertyLevel']
         self.gnn_type = config['gnn_type']
         self.gradCam = config['gradCam']
+        self.tsne = config['tsne']
         self.uncertainty = config['uncertainty']
         self.uncertaintyMode = config['uncertaintyMode']
         self.weight_regularizer = config['weight_regularizer']
@@ -209,7 +210,7 @@ class GNN_1(torch.nn.Module):
         elif self.graph_pooling == 'conv': # change readout layers input and output dimension
             L_in = self.mult * self.emb_dim / 2, self.mult * self.emb_dim / 2
         elif self.features:
-            if self.dataset == 'sol_calc/ALL': # 19 selected top mol descriptors 
+            if self.dataset == 'sol_calc/ALL': # 19 selected top mol descriptors # total is 200
                 L_in, L_out = self.mult * self.emb_dim + 19, self.emb_dim # 
         else: # change readout layers input and output dimension
             L_in, L_out = self.mult * self.emb_dim, self.emb_dim
@@ -250,9 +251,10 @@ class GNN_1(torch.nn.Module):
                 MolEmbed = self.pool(node_representation, batch)
         if self.propertyLevel == 'atom':
             MolEmbed = node_representation 
-        if self.features: # concatenating molecular features 
-            MolEmbed = torch.cat((MolEmbed, data.features), -1)
-        if not self.training and not self.gradCam: # for TSNE analysis
+        if self.features: # concatenating molecular features
+            #print(data.features.shape, MolEmbed.shape)
+            MolEmbed = torch.cat((MolEmbed, data.features.view(MolEmbed.shape[0], -1)), -1)
+        if not self.training and not self.gradCam and self.tsne: # for TSNE analysis
             return node_representation, MolEmbed
 
         # read-out layers
@@ -371,7 +373,7 @@ class GNN_1_2(torch.nn.Module):
         x_2 = scatter_mean(x, batch_2, dim=0)   # to add stability to models
         
         MolEmbed = torch.cat([x_1, x_2], dim=1)
-        if not self.training and not self.gradCam: # for TSNE analysis
+        if not self.training and not self.gradCam and self.tsne: # for TSNE analysis
             return node_representation, MolEmbed
 
         #MolEmbed = self.batch_norm(MolEmbed)

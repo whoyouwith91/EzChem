@@ -83,6 +83,7 @@ class get_data_loader():
             dataset = knnGraph_nmr(root=self.config['data_path'])
          elif self.config['mol_features']:
             dataset = knnGraph_mol(root=self.config['data_path'])
+            num_i_2 = None
          else:
             dataset = knnGraph(root=self.config['data_path'])
             num_i_2 = None
