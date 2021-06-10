@@ -2,12 +2,12 @@ import torch
 from torch import nn
 from torch_scatter import scatter_mean
 from torch_geometric.utils import add_self_loops, degree, softmax
-from torch_geometric.nn import global_add_pool, global_mean_pool, global_max_pool, GlobalAttention, Set2Set
 import torch.nn.functional as F
 from torch_scatter import scatter_add
 from torch_geometric.nn.inits import glorot, zeros
 from helper import *
 from layers import *
+from PhysDimeNet import PhysDimeNet
 
 def get_model(config):
     name = config['model']
@@ -29,6 +29,8 @@ def get_model(config):
         return knn_dropout
     if name == '1-2-GNN_swag':
         return knn_swag
+    if name == 'physnet':
+        return PhysDimeNet(**config)
     
 class GNN(torch.nn.Module):
     """
@@ -51,37 +53,40 @@ class GNN(torch.nn.Module):
         self.drop_ratio = config['drop_ratio']
         self.JK = config['JK']
         self.gnn_type = config['gnn_type']
-        self.aggregate = config['aggregate']
-        self.num_atom_features = config['num_atom_features']
         self.gradCam = config['gradCam']
+        self.bn = config['bn']
         self.act_fn = activation_func(config)
 
         if self.num_layer < 1:
             raise ValueError("Number of GNN layers must be no less than 1.")
-        
-        # embed nodes
-        self.x_embedding1 = torch.nn.Sequential(torch.nn.Linear(self.num_atom_features, self.emb_dim), torch.nn.ReLU())
-
+        self.linear_x = Linear(self.config['num_atom_features'], self.emb_dim)
         # define graph conv layers
         self.gnns = torch.nn.ModuleList()
         for _ in range(self.num_layer):
             if self.gnn_type == "gin":
-                self.gnns.append(GINConv(self.emb_dim, aggr=self.aggregate))
+                self.gnns.append(GINConv(self.config))
             elif self.gnn_type == "gcn":
-                self.gnns.append(GCNConv(self.emb_dim, aggr=self.aggregate))
+                self.gnns.append(GCNConv(self.config))
             elif self.gnn_type == 'nnconv':
-                self.gnns.append(NNCon(self.emb_dim, aggregate=self.aggregate))
+                self.gnns.append(NNConv_(self.config))
             elif self.gnn_type == "gat":
-                self.gnns.append(GATCon(self.emb_dim, aggr=self.aggregate))
+                self.gnns.append(GATCon(self.config))
             elif self.gnn_type == "graphsage":
-                self.gnns.append(GraphSAGEConv(self.emb_dim, aggr=self.aggregate))
+                self.gnns.append(GraphSAGEConv(self.config))
             elif self.gnn_type == 'pnaconv':
-                self.gnns.append(PNAConv_rev(self.emb_dim, aggr=self.aggregate, deg=config['degree']))
-               
+                self.gnns.append(PNAConv_rev(self.config))
+            elif self.gnn_type == 'graphconv':
+                self.gnns.append(GraphConv(self.emb_dim, self.emb_dim))
+        
+        if config['pooling'] == 'edge': # for edge pooling only
+            self.pool = PoolingFN(self.config)
+            assert len(self.pool) == self.num_layer
+        
         ###List of batchnorms
-        self.batch_norms = torch.nn.ModuleList()
-        for _ in range(self.num_layer):
-            self.batch_norms.append(torch.nn.BatchNorm1d(self.emb_dim))
+        if self.bn:
+            self.batch_norms = torch.nn.ModuleList()
+            for _ in range(self.num_layer):
+                self.batch_norms.append(torch.nn.BatchNorm1d(self.emb_dim))
     
         self.gradients = None # for GradCAM     
 
@@ -101,22 +106,31 @@ class GNN(torch.nn.Module):
     def forward(self, *argv):
         if len(argv) == 3:
             x, edge_index, edge_attr = argv[0], argv[1], argv[2]
+        elif len(argv) == 4:
+            x, edge_index, edge_attr, batch = argv[0], argv[1], argv[2], argv[3]
         elif len(argv) == 1:
             data = argv[0]
             x, edge_index, edge_attr = data.x, data.edge_index, data.edge_attr
         else:
             raise ValueError("unmatched number of arguments.")
-        x = self.x_embedding1(x)
+        
+        x = self.linear_x(x) # first linear on atoms 
         h_list = [x]
         for layer in range(self.num_layer):
+            #print(edge_index.shape)
+            #sys.stdout.flush()
             if self.config['residual_connect']: # adding residual connection
                 if layer > self.config['resLayer']: # need to change. currently default to 7 for 12 layers in total
-                    residual = h_list[layer]
-            h = self.gnns[layer](h_list[layer], edge_index, edge_attr)
+                    residual = h_list[layer] 
+            if self.gnn_type == 'graphconv':
+                h = self.gnns[layer](h_list[layer], edge_index)
+            else:
+                h = self.gnns[layer](h_list[layer], edge_index, edge_attr)
             if self.config['residual_connect']:
                 if layer > self.config['resLayer']:
                     h += residual
-            h = self.batch_norms[layer](h)
+            if self.bn:
+                h = self.batch_norms[layer](h)
             if layer == self.num_layer - 1:
                 #remove relu for the last layer
                 h = F.dropout(h, self.drop_ratio, training = self.training)
@@ -124,6 +138,8 @@ class GNN(torch.nn.Module):
             else:
                 h = self.act_fn(h)
                 h = F.dropout(h, self.drop_ratio, training = self.training)
+            if self.config['pooling'] == 'edge':
+                h, edge_index, batch, _ = self.pool[layer](h, edge_index, batch=batch)
             h_list.append(h)
             if self.gradCam and layer == self.num_layer - 1:
                 h.register_hook(self.activations_hook)
@@ -141,16 +157,18 @@ class GNN(torch.nn.Module):
             h_list = [h.unsqueeze_(0) for h in h_list]
             node_representation = torch.sum(torch.cat(h_list, dim = 0), dim = 0)
             #print(node_representation.shape)
-
-        return node_representation
-
+        if self.config['pooling'] == 'edge':
+            return node_representation, batch
+        else:
+            return node_representation
 
 class GNN_1(torch.nn.Module):
     def __init__(self, config):
         super(GNN_1, self).__init__()
+        self.config = config
         self.dataset = config['dataset']
         self.num_layer = config['num_layer']
-        self.NumOutLayers = config['NumOutLayers']
+        self.fully_connected_layer_sizes = config['fully_connected_layer_sizes']
         self.JK = config['JK']
         self.emb_dim = config['emb_dim']
         self.num_tasks = config['num_tasks']
@@ -169,35 +187,8 @@ class GNN_1(torch.nn.Module):
         self.outLayers = nn.ModuleList()
         if self.uncertainty:
             self.uncertaintyLayers = nn.ModuleList()
-        #Different kind of graph pooling
-        if self.graph_pooling == "sum":
-            self.pool = global_add_pool
-        elif self.graph_pooling == "mean":
-            self.pool = global_mean_pool
-        elif self.graph_pooling == "max":
-            self.pool = global_max_pool
-        elif self.graph_pooling == "attention":
-            if self.JK == "concat":
-                self.pool = GlobalAttention(gate_nn = torch.nn.Linear((self.num_layer + 1) * self.emb_dim, 1))
-            else:
-                self.pool = GlobalAttention(gate_nn = torch.nn.Linear(self.emb_dim, 1))
-        elif self.graph_pooling == "set2set":
-            set2set_iter = 2
-            if self.JK == "concat":
-                self.pool = Set2Set((self.num_layer + 1) * self.emb_dim, set2set_iter)
-            else:
-                self.pool = Set2Set(self.emb_dim, set2set_iter)
-        elif self.graph_pooling == 'conv':
-            self.pool = []
-            self.pool.append(global_add_pool)
-            self.pool.append(global_mean_pool)
-            self.pool.append(global_max_pool)
-            self.pool.append(GlobalAttention(gate_nn = torch.nn.Linear(self.emb_dim, 1)))
-            self.pool.append(Set2Set(self.emb_dim, 2))
-            self.convPool = nn.Conv1d(len(self.pool), 1, 2, stride=2)
-
-        else:
-            raise ValueError("Invalid graph pooling type.")
+        if self.graph_pooling != 'edge': # except for edge pooling, coded here
+            self.pool = PoolingFN(config)
 
         #For graph-level property predictions
         if self.graph_pooling[:-1][0] == "set2set": # set2set will double dimension
@@ -206,38 +197,40 @@ class GNN_1(torch.nn.Module):
             self.mult = 1
         
         if self.JK == "concat": # change readout layers input and output dimension
-            L_in, L_out = self.mult * (self.num_layer + 1) * self.emb_dim, self.emb_dim
+            embed_size = self.mult * (self.num_layer + 1) * self.emb_dim
         elif self.graph_pooling == 'conv': # change readout layers input and output dimension
-            L_in = self.mult * self.emb_dim / 2, self.mult * self.emb_dim / 2
+            embed_size = self.mult * self.emb_dim / 2  
         elif self.features:
-            if self.dataset == 'sol_calc/ALL': # 19 selected top mol descriptors # total is 200
-                L_in, L_out = self.mult * self.emb_dim + 19, self.emb_dim # 
+            if self.dataset == 'sol_calc/ALL': # 208 total mol descriptors # total is 200
+               embed_size = self.mult * self.emb_dim + 208
         else: # change readout layers input and output dimension
-            L_in, L_out = self.mult * self.emb_dim, self.emb_dim
+            embed_size = self.mult * self.emb_dim 
 
-        fc = nn.Sequential(Linear(L_in, L_out), nn.ReLU())
-        self.outLayers.append(fc)
-        for _ in range(self.NumOutLayers):
-            L_in, L_out = self.outLayers[-1][0].out_features, int(self.outLayers[-1][0].out_features / 2)
-            fc = nn.Sequential(Linear(L_in, L_out), activation_func(config))
+        for idx, (L_in, L_out) in enumerate(zip([embed_size] + self.fully_connected_layer_sizes, self.fully_connected_layer_sizes + [self.num_tasks])):
+            if idx != len(self.fully_connected_layer_sizes):
+                fc = nn.Sequential(Linear(L_in, L_out), activation_func(config), nn.Dropout(config['drop_ratio']))
+                #L_in, L_out = self.outLayers[-1][0].out_features, int(self.outLayers[-1][0].out_features / 2)    
+                if self.uncertainty: # for uncertainty 
+                    self.uncertaintyLayers.append(NNDropout(weight_regularizer=self.weight_regularizer, dropout_regularizer=self.dropout_regularizer)) 
+            else:
+                fc = nn.Sequential(Linear(L_in, L_out), nn.Dropout(config['drop_ratio']))
+                last_fc = fc
             self.outLayers.append(fc)
-            if self.uncertainty: # for uncertainty 
-                self.uncertaintyLayers.append(NNDropout(weight_regularizer=self.weight_regularizer, dropout_regularizer=self.dropout_regularizer)) 
-        last_fc = nn.Linear(L_out, self.num_tasks)
-        self.outLayers.append(last_fc)
 
         if self.uncertaintyMode == 'epistemic': 
             self.drop_mu = NNDropout(weight_regularizer=self.weight_regularizer, dropout_regularizer=self.dropout_regularizer) # working on last layer
         if self.uncertaintyMode == 'aleatoric': # 
-            self.outLayers.append(last_fc)
+            self.outLayers.append(last_fc) 
 
     def from_pretrained(self, model_file):
-        #self.gnn = GNN(self.num_layer, self.emb_dim, JK = self.JK, drop_ratio = self.drop_ratio)
-        self.gnn.load_state_dict(torch.load(model_file))
+        self.gnn.load_state_dict(torch.load(model_file)) 
 
     def forward(self, data):
         x, edge_index, edge_attr, batch = data.x, data.edge_index, data.edge_attr.long(), data.batch
-        node_representation = self.gnn(x, edge_index, edge_attr) # node updating 
+        if self.graph_pooling == 'edge':
+            node_representation, final_batch = self.gnn(x, edge_index, edge_attr, batch) # node updating
+        else:
+            node_representation = self.gnn(x, edge_index, edge_attr) # node updating 
 
         # graph pooling 
         if self.propertyLevel == 'molecule': 
@@ -246,9 +239,12 @@ class GNN_1(torch.nn.Module):
                 for p in self.pool:
                     MolEmbed_list.append(p(node_representation, batch))
                 MolEmbed_stack = torch.stack(MolEmbed_list, 1).squeeze()
-                MolEmbed = self.convPool(MolEmbed_stack).squeeze()
+                MolEmbed = self.pool(MolEmbed_stack).squeeze()
+            if self.graph_pooling == 'edge':
+                MolEmbed = global_mean_pool(node_representation, final_batch).squeeze()
             else:
-                MolEmbed = self.pool(node_representation, batch)
+                MolEmbed = node_representation 
+                #MolEmbed = self.pool(node_representation, batch)
         if self.propertyLevel == 'atom':
             MolEmbed = node_representation 
         if self.features: # concatenating molecular features
@@ -265,8 +261,11 @@ class GNN_1(torch.nn.Module):
                 return MolEmbed, None
             if self.propertyLevel == 'atom':
                 return MolEmbed.view(-1,1), None
-            else:
+            if self.graph_pooling == 'edge':
                 return MolEmbed.view(-1), None
+            else:
+                return self.pool(MolEmbed, batch).view(-1), None
+                #return MolEmbed.view(-1), None
         # for uncertainty analysis
         else:
             for layer, drop in zip(self.outLayers[1:-1], self.uncertaintyLayers):
@@ -283,13 +282,24 @@ class GNN_1(torch.nn.Module):
 class GNN_1_2(torch.nn.Module):
     def __init__(self, config):
         super(GNN_1_2, self).__init__()
+        self.num_i_2 = config['num_i_2']
+        self.config = config
+        self.dataset = config['dataset']
         self.num_layer = config['num_layer']
-        self.NumOutLayers = config['NumOutLayers']
+        self.fully_connected_layer_sizes = config['fully_connected_layer_sizes']
         self.JK = config['JK']
         self.emb_dim = config['emb_dim']
-        self.num_i_2 = config['num_i_2']
         self.num_tasks = config['num_tasks']
         self.graph_pooling = config['pooling']
+        self.propertyLevel = config['propertyLevel']
+        self.gnn_type = config['gnn_type']
+        self.gradCam = config['gradCam']
+        self.tsne = config['tsne']
+        self.uncertainty = config['uncertainty']
+        self.uncertaintyMode = config['uncertaintyMode']
+        self.weight_regularizer = config['weight_regularizer']
+        self.dropout_regularizer = config['dropout_regularizer']
+        self.features = config['mol_features']
 
         self.gnn = GNN(config)
         self.convISO1 = GraphConv(self.emb_dim + self.num_i_2, self.emb_dim)
@@ -297,53 +307,42 @@ class GNN_1_2(torch.nn.Module):
         self.outLayers = nn.ModuleList()
         #self.out_batch_norms = torch.nn.ModuleList()
 
-        #Different kind of graph pooling
-        if self.graph_pooling == "sum":
-            self.pool = global_add_pool
-        elif self.graph_pooling == "mean":
-            self.pool = global_mean_pool
-        elif self.graph_pooling == "max":
-            self.pool = global_max_pool
-        elif self.graph_pooling == "attention":
-            if self.JK == "concat":
-                self.pool = GlobalAttention(gate_nn = torch.nn.Linear((self.num_layer + 1) * self.emb_dim, 1))
-            else:
-                self.pool = GlobalAttention(gate_nn = torch.nn.Linear(self.emb_dim, 1))
-        elif self.graph_pooling == "set2set":
-            set2set_iter = 2
-            if self.JK == "concat":
-                self.pool = Set2Set((self.num_layer + 1) * self.emb_dim, set2set_iter)
-            else:
-                self.pool = Set2Set(self.emb_dim, set2set_iter)
-        else:
-            raise ValueError("Invalid graph pooling type.")
+        if self.uncertainty:
+            self.uncertaintyLayers = nn.ModuleList()
+        if self.graph_pooling != 'edge': # except for edge pooling, coded here
+            self.pool = PoolingFN(config)
 
-        #For graph-level binary classification
-        if self.graph_pooling[:-1][0] == "set2set":
+        #For graph-level property predictions
+        if self.graph_pooling[:-1][0] == "set2set": # set2set will double dimension
             self.mult = 3
         else:
             self.mult = 2
-        if self.JK == "concat":
-            L_in, L_out = self.mult * (self.num_layer + 1) * self.emb_dim, self.emb_dim
-        else:
-            L_in, L_out = self.mult * self.emb_dim, self.emb_dim
         
-        #self.batch_norm = torch.nn.BatchNorm1d(L_in)
-        fc = nn.Sequential(Linear(L_in, L_out), nn.ReLU())
-        self.outLayers.append(fc)
-        #self.out_batch_norms.append(torch.nn.BatchNorm1d(L_out))
-        for _ in range(self.NumOutLayers):
-            L_in, L_out = self.outLayers[-1][0].out_features, int(self.outLayers[-1][0].out_features / 2)
-            fc = nn.Sequential(Linear(L_in, L_out), activation_func(config))
+        if self.JK == "concat": # change readout layers input and output dimension
+            embed_size = self.mult * (self.num_layer + 1) * self.emb_dim
+        elif self.graph_pooling == 'conv': # change readout layers input and output dimension
+            embed_size = self.mult * self.emb_dim / 2  
+        elif self.features:
+            if self.dataset == 'sol_calc/ALL': # 208 total mol descriptors # total is 200
+               embed_size = self.mult * self.emb_dim + 208
+        else: # change readout layers input and output dimension
+            embed_size = self.mult * self.emb_dim 
+        
+        for idx, (L_in, L_out) in enumerate(zip([embed_size] + self.fully_connected_layer_sizes, self.fully_connected_layer_sizes + [self.num_tasks])):
+            if idx != len(self.fully_connected_layer_sizes):
+                fc = nn.Sequential(Linear(L_in, L_out), activation_func(config), nn.Dropout(config['drop_ratio']))
+                #L_in, L_out = self.outLayers[-1][0].out_features, int(self.outLayers[-1][0].out_features / 2)    
+                if self.uncertainty: # for uncertainty 
+                    self.uncertaintyLayers.append(NNDropout(weight_regularizer=self.weight_regularizer, dropout_regularizer=self.dropout_regularizer)) 
+            else:
+                fc = nn.Sequential(Linear(L_in, L_out), nn.Dropout(config['drop_ratio']))
+                last_fc = fc
             self.outLayers.append(fc)
-            #self.out_batch_norms.append(torch.nn.BatchNorm1d(L_out))
-        last_fc = nn.Linear(L_out, self.num_tasks)
-        self.outLayers.append(last_fc)
 
-        if self.JK == "concat":
-            self.graph_pred_linear = torch.nn.Linear(self.mult * (self.num_layer + 1) * self.emb_dim, self.num_tasks)
-        else:
-            self.graph_pred_linear = torch.nn.Linear(self.mult * self.emb_dim, self.num_tasks)
+        if self.uncertaintyMode == 'epistemic': 
+            self.drop_mu = NNDropout(weight_regularizer=self.weight_regularizer, dropout_regularizer=self.dropout_regularizer) # working on last layer
+        if self.uncertaintyMode == 'aleatoric': # 
+            self.outLayers.append(last_fc) 
 
     def from_pretrained(self, model_file):
         #self.gnn = GNN(self.num_layer, self.emb_dim, JK = self.JK, drop_ratio = self.drop_ratio)
@@ -351,16 +350,10 @@ class GNN_1_2(torch.nn.Module):
         #self.convISO1.load_state_dict(torch.load(conv1File))
         #self.convISO2.load_state_dict(torch.load(conv2File))
 
-    def forward(self, *argv):
-        if len(argv) == 4:
-            x, edge_index, edge_attr, batch = argv[0], argv[1], argv[2], argv[3]
-        elif len(argv) == 1:
-            data = argv[0]
-            x, iso_type_2, edge_index, edge_index_2, assignment_index_2, edge_attr, batch, batch_2 = \
+    def forward(self, data):
+        x, iso_type_2, edge_index, edge_index_2, assignment_index_2, edge_attr, batch, batch_2 = \
                 data.x, data.iso_type_2, data.edge_index, data.edge_index_2, data.assignment_index_2, \
                     data.edge_attr.long(), data.batch, data.batch_2
-        else:
-            raise ValueError("unmatched number of arguments.")
 
         node_representation = self.gnn(x, edge_index, edge_attr)
         x_1 = self.pool(node_representation, batch)
@@ -376,16 +369,30 @@ class GNN_1_2(torch.nn.Module):
         if not self.training and not self.gradCam and self.tsne: # for TSNE analysis
             return node_representation, MolEmbed
 
-        #MolEmbed = self.batch_norm(MolEmbed)
-        for layer, out_norm in zip(self.outLayers[:-1], self.out_batch_norms):
-             MolEmbed = layer(MolEmbed)
-             MolEmbed = out_norm(MolEmbed)
-        MolEmbed = self.outLayers[-1](MolEmbed)
-        
-        if self.num_tasks > 1:
-            return MolEmbed, None
+        # read-out layers
+        if not self.uncertainty:
+            for layer in self.outLayers:
+                MolEmbed = layer(MolEmbed)
+            if self.num_tasks > 1:
+                return MolEmbed, None
+            if self.propertyLevel == 'atom':
+                return MolEmbed.view(-1,1), None
+            if self.graph_pooling == 'edge':
+                return MolEmbed.view(-1), None
+            else:
+                #return self.pool(MolEmbed, batch).view(-1), None
+                return MolEmbed.view(-1), None
+        # for uncertainty analysis
         else:
-            return MolEmbed.view(-1), None
+            for layer, drop in zip(self.outLayers[1:-1], self.uncertaintyLayers):
+                x, _ = drop(MolEmbed, layer)
+            if self.config['uncertainty'] == 'epistemic':
+                mean, regularization[-1] = self.drop_mu(x, self.outLayers[-1])
+                return mean.squeeze()
+            if self.config['uncertainty'] == 'aleatoric':
+                mean = self.outLayers[-2](x)
+                log_var = self.outLayers[-1](x)
+                return mean, log_var
 
 class GNN_1_EFGS(torch.nn.Module):
     def __init__(self, config):
@@ -485,21 +492,30 @@ class GNN_1_EFGS(torch.nn.Module):
         else:
             return MolEmbed.view(-1), None
 
-
 class GNN_1_WithWater(torch.nn.Module):
     def __init__(self, config):
-        super(GNN_1_WithWater, self).__init__()
+        super(GNN_1, self).__init__()
+        self.dataset = config['dataset']
         self.num_layer = config['num_layer']
-        self.NumOutLayers = config['NumOutLayers']
+        self.fully_connected_layer_sizes = config['fully_connected_layer_sizes']
         self.JK = config['JK']
         self.emb_dim = config['emb_dim']
         self.num_tasks = config['num_tasks']
         self.graph_pooling = config['pooling']
-        self.dataset = config['dataset']
-        self.gnn_solute = GNN(config)
-        self.gnn_hydrated_solute = GNN(config)
+        self.propertyLevel = config['propertyLevel']
+        self.gnn_type = config['gnn_type']
+        self.gradCam = config['gradCam']
+        self.tsne = config['tsne']
+        self.uncertainty = config['uncertainty']
+        self.uncertaintyMode = config['uncertaintyMode']
+        self.weight_regularizer = config['weight_regularizer']
+        self.dropout_regularizer = config['dropout_regularizer']
+        self.features = config['mol_features']
 
+        self.gnn = GNN(config)
         self.outLayers = nn.ModuleList()
+        if self.uncertainty:
+            self.uncertaintyLayers = nn.ModuleList()
         #Different kind of graph pooling
         if self.graph_pooling == "sum":
             self.pool = global_add_pool
@@ -517,29 +533,49 @@ class GNN_1_WithWater(torch.nn.Module):
             if self.JK == "concat":
                 self.pool = Set2Set((self.num_layer + 1) * self.emb_dim, set2set_iter)
             else:
-                self.pool = Set2Set(2*self.emb_dim, set2set_iter)
+                self.pool = Set2Set(self.emb_dim, set2set_iter)
+        elif self.graph_pooling == 'conv':
+            self.pool = []
+            self.pool.append(global_add_pool)
+            self.pool.append(global_mean_pool)
+            self.pool.append(global_max_pool)
+            self.pool.append(GlobalAttention(gate_nn = torch.nn.Linear(self.emb_dim, 1)))
+            self.pool.append(Set2Set(self.emb_dim, 2))
+            self.convPool = nn.Conv1d(len(self.pool), 1, 2, stride=2)
+
         else:
             raise ValueError("Invalid graph pooling type.")
 
-        #For graph-level binary classification
-        if self.graph_pooling[:-1][0] == "set2set":
+        #For graph-level property predictions
+        if self.graph_pooling[:-1][0] == "set2set": # set2set will double dimension
             self.mult = 2
         else:
             self.mult = 1
+        
+        if self.JK == "concat": # change readout layers input and output dimension
+            embed_size = self.mult * (self.num_layer + 1) * self.emb_dim
+        elif self.graph_pooling == 'conv': # change readout layers input and output dimension
+            embed_size = self.mult * self.emb_dim / 2  
+        elif self.features:
+            if self.dataset == 'sol_calc/ALL': # 208 total mol descriptors # total is 200
+               embed_size = self.mult * self.emb_dim + 208
+        else: # change readout layers input and output dimension
+            embed_size = self.mult * self.emb_dim 
 
-        if self.JK == "concat":
-            L_in, L_out = self.mult * (self.num_layer + 1) * self.emb_dim, self.emb_dim
-        else:
-            L_in, L_out = 2 * self.mult * self.emb_dim, self.emb_dim
-
-        fc = nn.Sequential(Linear(L_in, L_out), nn.ReLU())
-        self.outLayers.append(fc)
-        for _ in range(self.NumOutLayers):
-            L_in, L_out = self.outLayers[-1][0].out_features, int(self.outLayers[-1][0].out_features / 2)
-            fc = nn.Sequential(Linear(L_in, L_out), activation_func(config))
+        for idx, (L_in, L_out) in enumerate(zip([embed_size] + self.fully_connected_layer_sizes, self.fully_connected_layer_sizes + [self.num_tasks])):
+            if idx != len(self.fully_connected_layer_sizes):
+                fc = nn.Sequential(Linear(L_in, L_out), activation_func(config), nn.Dropout(config['drop_ratio']))
+                #L_in, L_out = self.outLayers[-1][0].out_features, int(self.outLayers[-1][0].out_features / 2)    
+                if self.uncertainty: # for uncertainty 
+                    self.uncertaintyLayers.append(NNDropout(weight_regularizer=self.weight_regularizer, dropout_regularizer=self.dropout_regularizer)) 
+            else:
+                fc = nn.Sequential(Linear(L_in, L_out), nn.Dropout(config['drop_ratio']))
             self.outLayers.append(fc)
-        last_fc = nn.Linear(L_out, self.num_tasks)
-        self.outLayers.append(last_fc)
+
+        if self.uncertaintyMode == 'epistemic': 
+            self.drop_mu = NNDropout(weight_regularizer=self.weight_regularizer, dropout_regularizer=self.dropout_regularizer) # working on last layer
+        if self.uncertaintyMode == 'aleatoric': # 
+            self.outLayers.append(last_fc) 
 
     def from_pretrained(self, model_file_solute, model_file_solvent):
         #self.gnn = GNN(self.num_layer, self.emb_dim, JK = self.JK, drop_ratio = self.drop_ratio)
@@ -571,18 +607,28 @@ class GNN_1_WithWater(torch.nn.Module):
 
 class GNN_1_WithWater_simpler(torch.nn.Module):
     def __init__(self, config):
-        super(GNN_1_WithWater_simpler, self).__init__()
+        super(GNN_1, self).__init__()
+        self.dataset = config['dataset']
         self.num_layer = config['num_layer']
-        self.NumOutLayers = config['NumOutLayers']
+        self.fully_connected_layer_sizes = config['fully_connected_layer_sizes']
         self.JK = config['JK']
         self.emb_dim = config['emb_dim']
         self.num_tasks = config['num_tasks']
         self.graph_pooling = config['pooling']
-        self.dataset = config['dataset']
-        self.gnn_solute = GNN(config)
-        self.gnn_hydrated_solute = GNN(config)
+        self.propertyLevel = config['propertyLevel']
+        self.gnn_type = config['gnn_type']
+        self.gradCam = config['gradCam']
+        self.tsne = config['tsne']
+        self.uncertainty = config['uncertainty']
+        self.uncertaintyMode = config['uncertaintyMode']
+        self.weight_regularizer = config['weight_regularizer']
+        self.dropout_regularizer = config['dropout_regularizer']
+        self.features = config['mol_features']
 
+        self.gnn = GNN(config)
         self.outLayers = nn.ModuleList()
+        if self.uncertainty:
+            self.uncertaintyLayers = nn.ModuleList()
         #Different kind of graph pooling
         if self.graph_pooling == "sum":
             self.pool = global_add_pool
@@ -595,37 +641,54 @@ class GNN_1_WithWater_simpler(torch.nn.Module):
                 self.pool = GlobalAttention(gate_nn = torch.nn.Linear((self.num_layer + 1) * self.emb_dim, 1))
             else:
                 self.pool = GlobalAttention(gate_nn = torch.nn.Linear(self.emb_dim, 1))
-        elif self.graph_pooling[:-1][0] == "set2set":
+        elif self.graph_pooling == "set2set":
             set2set_iter = 2
             if self.JK == "concat":
                 self.pool = Set2Set((self.num_layer + 1) * self.emb_dim, set2set_iter)
             else:
-                self.pool = Set2Set(2*self.emb_dim, set2set_iter)
+                self.pool = Set2Set(self.emb_dim, set2set_iter)
+        elif self.graph_pooling == 'conv':
+            self.pool = []
+            self.pool.append(global_add_pool)
+            self.pool.append(global_mean_pool)
+            self.pool.append(global_max_pool)
+            self.pool.append(GlobalAttention(gate_nn = torch.nn.Linear(self.emb_dim, 1)))
+            self.pool.append(Set2Set(self.emb_dim, 2))
+            self.convPool = nn.Conv1d(len(self.pool), 1, 2, stride=2)
+
         else:
             raise ValueError("Invalid graph pooling type.")
 
-        #For graph-level binary classification
-        if self.graph_pooling[:-1][0] == "set2set":
+        #For graph-level property predictions
+        if self.graph_pooling[:-1][0] == "set2set": # set2set will double dimension
             self.mult = 2
         else:
             self.mult = 1
         
-        if self.dataset in ['logpWithWater']:
-            self.mult = self.mult * 2
+        if self.JK == "concat": # change readout layers input and output dimension
+            embed_size = self.mult * (self.num_layer + 1) * self.emb_dim
+        elif self.graph_pooling == 'conv': # change readout layers input and output dimension
+            embed_size = self.mult * self.emb_dim / 2  
+        elif self.features:
+            if self.dataset == 'sol_calc/ALL': # 208 total mol descriptors # total is 200
+               embed_size = self.mult * self.emb_dim + 208
+        else: # change readout layers input and output dimension
+            embed_size = self.mult * self.emb_dim 
 
-        if self.JK == "concat":
-            L_in, L_out = self.mult * (self.num_layer + 1) * self.emb_dim, self.emb_dim
-        else:
-            L_in, L_out = 2 * self.mult * self.emb_dim, self.emb_dim
-
-        fc = nn.Sequential(Linear(L_in, L_out), nn.ReLU())
-        self.outLayers.append(fc)
-        for _ in range(self.NumOutLayers):
-            L_in, L_out = self.outLayers[-1][0].out_features, int(self.outLayers[-1][0].out_features / 2)
-            fc = nn.Sequential(Linear(L_in, L_out), activation_func(config))
+        for idx, (L_in, L_out) in enumerate(zip([embed_size] + self.fully_connected_layer_sizes, self.fully_connected_layer_sizes + [self.num_tasks])):
+            if idx != len(self.fully_connected_layer_sizes):
+                fc = nn.Sequential(Linear(L_in, L_out), activation_func(config), nn.Dropout(config['drop_ratio']))
+                #L_in, L_out = self.outLayers[-1][0].out_features, int(self.outLayers[-1][0].out_features / 2)    
+                if self.uncertainty: # for uncertainty 
+                    self.uncertaintyLayers.append(NNDropout(weight_regularizer=self.weight_regularizer, dropout_regularizer=self.dropout_regularizer)) 
+            else:
+                fc = nn.Sequential(Linear(L_in, L_out), nn.Dropout(config['drop_ratio']))
             self.outLayers.append(fc)
-        last_fc = nn.Linear(L_out, self.num_tasks)
-        self.outLayers.append(last_fc)
+
+        if self.uncertaintyMode == 'epistemic': 
+            self.drop_mu = NNDropout(weight_regularizer=self.weight_regularizer, dropout_regularizer=self.dropout_regularizer) # working on last layer
+        if self.uncertaintyMode == 'aleatoric': # 
+            self.outLayers.append(last_fc) 
 
     def from_pretrained(self, model_file_solute, model_file_solvent):
         #self.gnn = GNN(self.num_layer, self.emb_dim, JK = self.JK, drop_ratio = self.drop_ratio)
@@ -657,6 +720,166 @@ class GNN_1_WithWater_simpler(torch.nn.Module):
             return final_representation, None
         else:
             return final_representation.view(-1), None
+
+class GNN_1_interaction(torch.nn.Module):
+    def __init__(self, config):
+        super(GNN_1, self).__init__()
+        self.dataset = config['dataset']
+        self.num_layer = config['num_layer']
+        self.fully_connected_layer_sizes = config['fully_connected_layer_sizes']
+        self.JK = config['JK']
+        self.emb_dim = config['emb_dim']
+        self.num_tasks = config['num_tasks']
+        self.graph_pooling = config['pooling']
+        self.propertyLevel = config['propertyLevel']
+        self.gnn_type = config['gnn_type']
+        self.gradCam = config['gradCam']
+        self.tsne = config['tsne']
+        self.uncertainty = config['uncertainty']
+        self.uncertaintyMode = config['uncertaintyMode']
+        self.weight_regularizer = config['weight_regularizer']
+        self.dropout_regularizer = config['dropout_regularizer']
+        self.features = config['mol_features']
+
+        self.gnn_solute = GNN(config)
+        if self.solvent == 'water': # to do adding to args
+            self.gnn_solvent = nn.Sequential(nn.Linear(self.config['num_atom_features'], self.emb_dim),
+                                            torch.nn.ReLU(), \
+                                            nn.Linear(self.emb_dim, self.emb_dim))
+        elif self.solvent == 'octanol':
+            self.gnn_solvent = GNN(config)
+        else:
+            raise ValueError('Solvent need to be specified.')
+
+        self.imap = nn.Linear(2*self.emb_dim, 1) # create a placeholder for interaction map
+        self.outLayers = nn.ModuleList()
+        #Different kind of graph pooling
+        if self.graph_pooling == "sum":
+            self.pool = global_add_pool
+        elif self.graph_pooling == "mean":
+            self.pool = global_mean_pool
+        elif self.graph_pooling == "max":
+            self.pool = global_max_pool
+        elif self.graph_pooling == "attention":
+            if self.JK == "concat":
+                self.pool = GlobalAttention(gate_nn = torch.nn.Linear((self.num_layer + 1) * self.emb_dim, 1))
+            else:
+                self.pool = GlobalAttention(gate_nn = torch.nn.Linear(self.emb_dim, 1))
+        elif self.graph_pooling == "set2set":
+            set2set_iter = 2
+            if self.JK == "concat":
+                self.pool = Set2Set((self.num_layer + 1) * self.emb_dim, set2set_iter)
+            else:
+                self.pool = Set2Set(self.emb_dim, set2set_iter)
+        elif self.graph_pooling == 'conv':
+            self.pool = []
+            self.pool.append(global_add_pool)
+            self.pool.append(global_mean_pool)
+            self.pool.append(global_max_pool)
+            self.pool.append(GlobalAttention(gate_nn = torch.nn.Linear(self.emb_dim, 1)))
+            self.pool.append(Set2Set(self.emb_dim, 2))
+            self.convPool = nn.Conv1d(len(self.pool), 1, 2, stride=2)
+        else:
+            raise ValueError("Invalid graph pooling type.")
+
+        #For graph-level binary classification
+        if self.graph_pooling[:-1][0] == "set2set":
+            self.mult = 2
+        else:
+            self.mult = 1
+
+        if self.JK == "concat": # change readout layers input and output dimension
+            embed_size = self.mult * (self.num_layer + 1) * self.emb_dim
+        elif self.graph_pooling == 'conv': # change readout layers input and output dimension
+            embed_size = self.mult * self.emb_dim / 2  
+        elif self.features:
+            if self.dataset == 'sol_calc/ALL': # 208 total mol descriptors # total is 200
+               embed_size = self.mult * self.emb_dim + 208
+        else: # change readout layers input and output dimension
+            embed_size = self.mult * self.emb_dim 
+
+        for idx, (L_in, L_out) in enumerate(zip([embed_size] + self.fully_connected_layer_sizes, self.fully_connected_layer_sizes + [self.num_tasks])):
+            if idx != len(self.fully_connected_layer_sizes):
+                fc = nn.Sequential(Linear(L_in, L_out), activation_func(config), nn.Dropout(config['drop_ratio']))
+                #L_in, L_out = self.outLayers[-1][0].out_features, int(self.outLayers[-1][0].out_features / 2)    
+                if self.uncertainty: # for uncertainty 
+                    self.uncertaintyLayers.append(NNDropout(weight_regularizer=self.weight_regularizer, dropout_regularizer=self.dropout_regularizer)) 
+            else:
+                fc = nn.Sequential(Linear(L_in, L_out), nn.Dropout(config['drop_ratio']))
+                last_fc = fc
+            self.outLayers.append(fc)
+
+        if self.uncertaintyMode == 'epistemic': 
+            self.drop_mu = NNDropout(weight_regularizer=self.weight_regularizer, dropout_regularizer=self.dropout_regularizer) # working on last layer
+        if self.uncertaintyMode == 'aleatoric': # 
+            self.outLayers.append(last_fc) 
+
+    def from_pretrained(self, model_file_solute, model_file_solvent):
+        #self.gnn = GNN(self.num_layer, self.emb_dim, JK = self.JK, drop_ratio = self.drop_ratio)
+        self.gnn_solute.load_state_dict(torch.load(model_file_solute))
+        self.gnn_solvent.load_state_dict(torch.load(model_file_solvent))
+
+
+    def forward(self, data):
+        solute_batch, solute_x, solute_edge_index, solute_edge_attr, solute_length_matrix, solvent_batch, solvent_x, solvent_length_matrix = \
+                data.batch, data.x, data.edge_index, data.edge_attr.long(), data.solute_length_matrix, \
+                data.solvent_batch, data.solvent_x, data.solvent_length_matrix
+        if self.solvent == 'octanol':
+            solvent_edge_index, solvent_edge_attr = data.solvent_edge_index, data.solvent_edge_attr.long()
+
+        solute_representation = self.gnn_solute(solute_x, solute_edge_index, solute_edge_attr) # 22 * 64
+        if self.solvent == 'water':
+            solvent_representation = self.gnn_solvent(solvent_x)
+        if self.solvent == 'octanol':
+            solvent_representation = self.gnn_solvent(solvent_x, solvent_edge_index, solvent_edge_attr) # 27 * 64
+        #MolEmbed = self.pool(node_representation, batch)
+
+        # Interaction part 
+        len_map = torch.mm(solute_length_matrix.t(), solvent_length_matrix)  # interaction map to control which solvent mols  22*27
+        #corresponds to which solute mol
+        if 'dot' not in self.interaction: # to be adding to args
+            X1 = solute_representation.unsqueeze(0) # 1*22*64
+            Y1 = solvent_representation.unsqueeze(1) # 27*1*64
+            X2 = X1.repeat(solvent_representation.shape[0], 1, 1) # 27*22*64
+            Y2 = Y1.repeat(1, solute_representation.shape[0], 1) # 27*22*64
+            Z = torch.cat([X2, Y2], -1) # 27*22*128
+
+            if self.interaction == 'general':
+                interaction_map = self.imap(Z).squeeze(2) # 27*22
+            if self.interaction == 'tanh-general':
+                interaction_map = torch.tanh(self.imap(Z)).squeeze(2)
+
+            interaction_map = torch.mul(len_map.float(), interaction_map.t()) # 22*27
+            ret_interaction_map = torch.clone(interaction_map)
+
+        elif 'dot' in self.interaction:
+            interaction_map = torch.mm(solute_representation, solvent_representation.t()) # interaction coefficient 22 * 27
+            if 'scaled' in self.interaction:
+                interaction_map = interaction_map / (np.sqrt(self.emb_dim))
+
+            ret_interaction_map = torch.clone(interaction_map)
+            ret_interaction_map = torch.mul(len_map.float(), ret_interaction_map) # 22 * 27
+            interaction_map = torch.tanh(interaction_map) # 22*27
+            interaction_map = torch.mul(len_map.float(), interaction_map) # 22 * 27
+
+        solvent_prime = torch.mm(interaction_map.t(), solute_representation) # 27 * 64
+        solute_prime = torch.mm(interaction_map, solvent_representation) # 22 * 64
+
+        # Prediction
+        solute_representation = torch.cat((solute_representation, solute_prime), dim=1) # 22 * 128
+        solvent_representation = torch.cat((solvent_representation, solvent_prime), dim=1) # 27 * 128
+        #print(solute_representation.shape)
+        solute_representation = self.pool(solute_representation, solute_batch) # bs * 128
+        solvent_representation = self.pool(solvent_representation, solvent_batch) # bs * 128
+        #print(solute_representation.shape)
+        final_representation = torch.cat((solute_representation, solvent_representation), 1) # bs * 256
+
+        for layer in self.outLayers:
+             final_representation = layer(final_representation)
+        if self.num_tasks > 1:
+            return final_representation, ret_interaction_map
+        else:
+            return final_representation.view(-1), ret_interaction_map
 
 class DNN(torch.nn.Module):
     def __init__(self, in_size, hidden_size, out_size, n_hidden, activation, bn):

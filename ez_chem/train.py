@@ -4,10 +4,13 @@ from helper import *
 from data import *
 from trainer import *
 from models import *
+from utils_functions import floating_type
+from Optimizers import EmaAmsGrad
+from kwargs import *
 
 def main():
     # Training settings
-    parser = argparse.ArgumentParser(description='PyTorch implementation of pre-training of graph neural networks')
+    parser = argparse.ArgumentParser(description='PyTorch implementation of graph neural networks')
     parser.add_argument('--allDataPath', type=str, default='/scratch/dz1061/gcn/chemGraph/data')
     parser.add_argument('--running_path', type=str,
                         help='path to save model', default='/scratch/dz1061/gcn/chemGraph/results')    
@@ -19,13 +22,18 @@ def main():
                         help='number of epochs to train (default: 100)')
     parser.add_argument('--lr', type=float, default=0.001,
                         help='learning rate (default: 0.001)')
-    parser.add_argument('--decay', type=float, default=0,
-                        help='weight decay (default: 0)')
+    parser.add_argument('--scheduler', type=str, default='const')
+    parser.add_argument('--warmup_epochs', type=int, default=2)
+    parser.add_argument('--init_lr', type=float, default=0.0001)
+    parser.add_argument('--max_lr', type=float, default=0.001)
+    parser.add_argument('--final_lr', type=float, default=0.0001)
+    parser.add_argument('--patience_epochs', type=int, default=2)
+    parser.add_argument('--decay_factor', type=float, default=0.9)
     parser.add_argument('--num_layer', type=int, default=5,
                         help='number of GNN message passing layers (default: 5).')
     parser.add_argument('--emb_dim', type=int, default=300,
                         help='embedding dimensions (default: 300)')
-    parser.add_argument('--NumOutLayers', type=int, default=3) # number of readout layers
+    parser.add_argument('--fully_connected_layer_sizes', type=int, nargs='+') # number of readout layers
     parser.add_argument('--dataset', type=str, default = 'zinc_standard_agent', help='root directory of dataset for pretraining')
     parser.add_argument('--normalize', action='store_true')  # on target data
     parser.add_argument('--drop_ratio', type=float, default=0.0) 
@@ -40,8 +48,11 @@ def main():
     parser.add_argument('--pooling', type=str, default='sum')
     parser.add_argument('--aggregate', type=str, default='add')
     parser.add_argument('--gnn_type', type=str, default="gin")
+    parser.add_argument('--bn', action='store_true')
     parser.add_argument('--JK', type=str, default="last",
                         help='how the node features are combined across layers. last, sum, max or concat')
+    parser.add_argument('--action', type=str) # physnet
+    parser.add_argument('--mask', action='store_true')
     parser.add_argument('--train_type', type=str, default='from_scratch', choices=['from_scratch', 'transfer', 'hpsearch', 'finetuning'])
     parser.add_argument('--preTrainedPath', type=str)
     parser.add_argument('--OnlyPrediction', action='store_true')
@@ -49,8 +60,7 @@ def main():
     parser.add_argument('--metrics', type=str, choices=['l1', 'l2'])
     parser.add_argument('--weights', type=str, choices=['he_norm', 'xavier_norm', 'he_uni', 'xavier_uni'], default='he_uni')
     parser.add_argument('--act_fn', type=str, default='relu')
-    parser.add_argument('--lr_style', type=str, choices=['constant', 'decay']) # now is exponential decay on valid loss
-    parser.add_argument('--optimizer',  type=str, choices=['adam', 'sgd', 'swa'])
+    parser.add_argument('--optimizer',  type=str, choices=['adam', 'sgd', 'swa', 'EMA'])
     parser.add_argument('--style', type=str, choices=['base', 'CV', 'preTraining'])  # if running CV
     parser.add_argument('--early_stopping', action='store_true')
     parser.add_argument('--experiment', type=str)  # when doing experimenting, name it. 
@@ -58,7 +68,7 @@ def main():
     parser.add_argument('--propertyLevel', type=str, default='molecule')
     parser.add_argument('--gradCam', action='store_true')
     parser.add_argument('--tsne', action='store_true')
-    parser.add_argument('--uncertainty',  type=str)
+    parser.add_argument('--uncertainty',  action='store_true')
     parser.add_argument('--uncertaintyMode',  type=str)
     parser.add_argument('--weight_regularizer', type=float, default=1e-6)
     parser.add_argument('--dropout_regularizer', type=float, default=1e-5)
@@ -66,9 +76,10 @@ def main():
     args = parser.parse_args()
 
     set_seed(args.seed)
-    device = torch.device("cuda:" + str(args.device)) if torch.cuda.is_available() else torch.device("cpu")
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     this_dic = vars(args)
+    this_dic['device'] = device
     # define a path to save training results: save models and data
     this_dic['running_path'] = os.path.join(args.running_path, args.dataset, args.model, args.gnn_type, args.experiment) 
     if not os.path.exists(os.path.join(args.running_path, 'trained_model/')):
@@ -112,6 +123,9 @@ def main():
         this_dic['resLayer'] = args.resLayer
     
     # loading model
+    if args.model in ['physnet']: # loading physnet params
+        this_dic['n_feature'] = this_dic['emb_dim']
+        this_dic = {**this_dic, **physnet_kwargs}
     model = get_model(this_dic)
     if this_dic['train_type'] == 'from_scratch': 
         model = init_weights(model, this_dic)
@@ -127,10 +141,19 @@ def main():
     saveConfig(this_dic, name='config.json')
     
     # training parts
-    model_ = model.to(device)
-    optimizer = get_optimizer(args, model_)
-    if this_dic['lr_style'] == 'decay':
-        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, factor=0.9, patience=5, min_lr=0.00001)
+    if args.model in ['physnet']: 
+        model_ = model.type(floating_type).to(device)
+    else:
+        model_ = model.to(device)
+    if args.optimizer == 'EMA':
+        shadow_model = get_model(this_dic).to(device)
+        if args.model in ['physnet']: 
+            shadow_model = shadow_model.type(floating_type)
+        shadow_model.load_state_dict(model_.state_dict())
+        optimizer = EmaAmsGrad(model_.parameters(), shadow_model, lr=this_dic['lr'], ema=0.999)
+    else:
+        optimizer = get_optimizer(args, model_)
+    scheduler = build_lr_scheduler(optimizer, this_dic)
     if this_dic['uncertainty']:
         optimizer = torchcontrib.optim.SWA(optimizer)
     
@@ -140,33 +163,43 @@ def main():
         model_.eval()
     for epoch in range(1, this_dic['epochs']+1):
         time_tic = time.time() # starting time
-        if this_dic['lr_style'] == 'decay':
-            lr = scheduler.optimizer.param_groups[0]['lr']
-        else:
-            lr = args.lr
+        if this_dic['scheduler'] == 'const': lr = args.lr
+        elif this_dic['scheduler'] in ['NoamLR', 'step']: lr = scheduler.get_lr()[0]
+        else:lr = scheduler.optimizer.param_groups[0]['lr'] # decaying on val error
+
         if not args.OnlyPrediction:
-            loss = train(model_, optimizer, train_loader, this_dic) # training loss
+            loss = train_model(this_dic)(model_, optimizer, train_loader, this_dic, scheduler=scheduler) # training loss
         else:
             loss = 0.
         time_toc = time.time() # ending time 
 
+        # testing parts
         if this_dic['dataset'] in ['mp', 'mp_drugs', 'xlogp3', 'calcLogP/ALL', 'sol_calc/ALL', \
              'solOct_calc/ALL', 'solWithWater_calc/ALL', 'solOctWithWater_calc/ALL', 'calcLogPWithWater/ALL', \
                  'qm9/nmr/carbon', 'qm9/nmr/hydrogen', 'qm9/nmr/allAtoms', 'calcSolLogP/ALL']:
             train_error = loss # coz train set is too large to be tested every epoch
         else:
-            train_error = test(model_, train_loader, this_dic)
-        val_error = test(model_, val_loader, this_dic)
-        test_error = test(model_, test_loader, this_dic)
-        if this_dic['lr_style'] == 'decay':
+            train_error = test_model(this_dic)(model_, train_loader, this_dic) # test on entire dataset
+        if args.optimizer == 'EMA':
+            shadow_model = optimizer.shadow_model
+            val_error = test_model(this_dic)(shadow_model, val_loader, this_dic)
+            test_error = test_model(this_dic)(shadow_model, test_loader, this_dic)
+        else:
+            val_error = test_model(this_dic)(model_, val_loader, this_dic) # test on entire dataset
+            test_error = test_model(this_dic)(model_, test_loader, this_dic) # test on entire dataset
+        if this_dic['scheduler'] == 'decay':
             scheduler.step(val_error)
 
+        # write out models and results
         if not this_dic['uncertainty']:
             contents = [epoch, round(time_toc-time_tic, 2), round(lr,7), round(train_error,3),  \
                 round(val_error,3), round(test_error,3), round(param_norm(model_),2), round(grad_norm(model_),2)]
             results.add_row(contents) # updating pretty table 
             saveToResultsFile(results, this_dic, name='data.txt') # save instant data to directory
-            best_val_error = saveModel(this_dic, epoch, model_.gnn, best_val_error, val_error) # save model if validation error hits new lower 
+            if args.optimizer == 'EMA':
+                best_val_error = saveModel(this_dic, epoch, shadow_model, best_val_error, val_error)
+            else:
+                best_val_error = saveModel(this_dic, epoch, model_, best_val_error, val_error) # save model if validation error hits new lower 
     torch.save(model.state_dict(), os.path.join(this_dic['running_path'], 'trained_model', 'model_last.pt'))
 
 if __name__ == "__main__":

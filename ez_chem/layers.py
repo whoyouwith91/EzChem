@@ -16,7 +16,7 @@ from torch_geometric.typing import Adj, OptTensor
 from torch_geometric.nn import MessagePassing
 from torch_geometric.nn import NNConv, GATConv, GraphConv
 from torch_geometric.utils import add_self_loops, degree, softmax
-from torch_geometric.nn import global_add_pool, global_mean_pool, global_max_pool, GlobalAttention, Set2Set
+from torch_geometric.nn import EdgePooling, global_add_pool, global_mean_pool, global_max_pool, GlobalAttention, Set2Set
 import torch.nn.functional as F
 from torch_scatter import scatter_add
 from torch_geometric.nn.inits import glorot, zeros
@@ -27,14 +27,6 @@ num_bond_type = 6 #including aromatic and self-loop edge, and extra masked token
 num_bond_direction = 4 
 
 class GINConv(MessagePassing):
-    """
-    Extension of GIN aggregation to incorporate edge information by concatenation.
-    Args:
-        emb_dim (int): dimensionality of embeddings for nodes and edges.
-        embed_input (bool): whether to embed input or not. 
-        
-    See https://arxiv.org/abs/1810.00826
-    """
     def __init__(self, emb_dim, aggr = "add"):
         super(GINConv, self).__init__()
         #multi-layer perceptron
@@ -225,32 +217,37 @@ class GraphSAGEConv(MessagePassing):
     def update(self, aggr_out):
         return F.normalize(aggr_out, p = 2, dim = -1)
 
-class NNCon(torch.nn.Module):
-    def __init__(self, emb_dim, aggregate):
-        super(NNCon, self).__init__()
-        self.emb_dim = emb_dim
-        self.edge_embedding1 = torch.nn.Embedding(num_bond_type, emb_dim)
-        self.edge_embedding2 = torch.nn.Embedding(num_bond_direction, emb_dim)
+class NNConv_(torch.nn.Module):
+    def __init__(self, config):
+        super(NNConv_, self).__init__()
+        self.B_in = 32
+        self.emb_dim = config['emb_dim']
+        self.aggr = config['aggregate']
 
+        self.edge_embedding1 = torch.nn.Embedding(num_bond_type, self.B_in)
+        self.edge_embedding2 = torch.nn.Embedding(num_bond_direction, self.B_in)
+        
         torch.nn.init.xavier_uniform_(self.edge_embedding1.weight.data)
         torch.nn.init.xavier_uniform_(self.edge_embedding2.weight.data)
-
-        M_in, B_in, M_out = emb_dim, emb_dim, emb_dim 
-        ll = Sequential(Linear(B_in, 128), nn.ReLU(), Linear(128, M_in * M_out))
-        self.conv_ = NNConv(M_in, M_out, ll, aggr=aggregate)
+ 
+        self.ll = nn.Sequential(Linear(self.emb_dim, self.emb_dim * self.emb_dim), nn.ReLU()) # linear layer
+        self.conv = NNConv(self.emb_dim, self.emb_dim, self.ll, aggr=self.aggr)
+        #self.linear_x = Linear(self.emb_dim, self.emb_dim)
+        self.linear_b = Linear(self.B_in, self.emb_dim)
 
     def forward(self, x, edge_index, edge_attr):
         edge_index = add_self_loops(edge_index, num_nodes = x.size(0))
-
         #add features corresponding to self-loop edges.
         self_loop_attr = torch.zeros(x.size(0), 2)
         self_loop_attr[:,0] = 4 #bond type for self-loop edge
         self_loop_attr = self_loop_attr.to(edge_attr.device).to(edge_attr.dtype)
         edge_attr = torch.cat((edge_attr, self_loop_attr), dim = 0)
-
         edge_embeddings = self.edge_embedding1(edge_attr[:,0]) + self.edge_embedding2(edge_attr[:,1])
         
-        return self.conv_(x, edge_index[0], edge_embeddings)
+        #x = self.linear_x(x)
+        edge = self.linear_b(edge_embeddings)
+
+        return self.conv(x, edge_index[0], edge)
 
 class NNDropout(nn.Module):
     def __init__(self, weight_regularizer, dropout_regularizer, init_min=0.1, init_max=0.1):
@@ -503,97 +500,7 @@ class NNConv_rev(MessagePassing):
         self.edge_embedding1 = torch.nn.Embedding(num_bond_type, out_channels)
         self.edge_embedding2 = torch.nn.Embedding(num_bond_direction, out_channels)
 
-        M_in, B_in, M_out = out_channels, out_channels, out_channels
-        self.nn = Sequential(Linear(B_in, 128), nn.ReLU(), Linear(128, M_in * M_out))
-        self.aggregators = aggregators
-        self.scalers = scalers
-
-        deg = deg.to(torch.float)
-        self.avg_deg: Dict[str, float] = {
-            'lin': deg.mean().item(),
-            'log': (deg + 1).log().mean().item(),
-            'exp': deg.exp().mean().item(),
-        }
-
-        if isinstance(in_channels, int):
-            in_channels = (in_channels, in_channels)
-
-        self.in_channels_l = in_channels[0]
-        self.lin = Linear(self.out_channels*12, self.out_channels)
-
-    def forward(self, x: Union[Tensor, OptPairTensor], edge_index: Adj,
-                edge_attr: OptTensor = None, size: Size = None) -> Tensor:
-        """"""
         
-        edge_index = add_self_loops(edge_index, num_nodes = x.size(0))
-
-        #add features corresponding to self-loop edges.
-        self_loop_attr = torch.zeros(x.size(0), 2)
-        self_loop_attr[:,0] = 4 #bond type for self-loop edge
-        self_loop_attr = self_loop_attr.to(edge_attr.device).to(edge_attr.dtype)
-        edge_attr = torch.cat((edge_attr, self_loop_attr), dim = 0)
-
-        edge_embeddings = self.edge_embedding1(edge_attr[:,0]) + self.edge_embedding2(edge_attr[:,1])
-
-        # propagate_type: (x: OptPairTensor, edge_attr: OptTensor)
-        out = self.propagate(edge_index[0], x=x, edge_attr=edge_embeddings, size=size)
-        out = F.relu(self.lin(out))
-        return out
-
-
-    def message(self, x_j: Tensor, edge_attr: Tensor) -> Tensor:
-        weight = self.nn(edge_attr)
-        weight = weight.view(-1, self.in_channels_l, self.out_channels)
-        return torch.matmul(x_j.unsqueeze(1), weight).squeeze(1)
-
-    def aggregate(self, inputs: Tensor, index: Tensor,
-                  dim_size: Optional[int] = None) -> Tensor:
-
-        outs = []
-        #print(inputs.shape, index.shape)
-        for aggregator in self.aggregators:
-            if aggregator == 'sum':
-                out = scatter(inputs, index, 0, None, dim_size, reduce='sum')
-                #print(out.shape)
-            elif aggregator == 'mean':
-                out = scatter(inputs, index, 0, None, dim_size, reduce='mean')
-                #print(out.shape)
-            elif aggregator == 'min':
-                out = scatter(inputs, index, 0, None, dim_size, reduce='min')
-            elif aggregator == 'max':
-                out = scatter(inputs, index, 0, None, dim_size, reduce='max')
-            elif aggregator == 'var' or aggregator == 'std':
-                mean = scatter(inputs, index, 0, None, dim_size, reduce='mean')
-                mean_squares = scatter(inputs * inputs, index, 0, None,
-                                       dim_size, reduce='mean')
-                out = mean_squares - mean * mean
-                if aggregator == 'std':
-                    out = torch.sqrt(torch.relu(out) + 1e-5)
-            else:
-                raise ValueError(f'Unknown aggregator "{aggregator}".')
-            outs.append(out)
-        out = torch.cat(outs, dim=-1)
-
-        deg = degree(index, dim_size, dtype=inputs.dtype)
-        deg = deg.clamp_(1).view(-1, 1)
-
-        outs = []
-        for scaler in self.scalers:
-            if scaler == 'identity':
-                pass
-            elif scaler == 'amplification':
-                out = out * (torch.log(deg + 1) / self.avg_deg['log'])
-            elif scaler == 'attenuation':
-                out = out * (self.avg_deg['log'] / torch.log(deg + 1))
-            elif scaler == 'linear':
-                out = out * (deg / self.avg_deg['lin'])
-            elif scaler == 'inverse_linear':
-                out = out * (self.avg_deg['lin'] / deg)
-            else:
-                raise ValueError(f'Unknown scaler "{scaler}".')
-            outs.append(out)
-            #print(out.shape)
-        return torch.cat(outs, dim=-1)
 
 def index_select_ND(source: torch.Tensor, index: torch.Tensor) -> torch.Tensor:
     """
@@ -669,3 +576,39 @@ class LayerNorm(nn.Module):
         mean = x.mean(-1, keepdim=True)
         std = x.std(-1, keepdim=True)
         return self.a_2 * (x - mean) / (std + self.eps) + self.b_2
+
+def PoolingFN(config):
+    #Different kind of graph pooling
+    if config['pooling'] == "sum":
+        pool = global_add_pool
+    elif config['pooling'] == "mean":
+        pool = global_mean_pool
+    elif config['pooling'] == "max":
+        pool = global_max_pool
+    elif config['pooling'] == "attention":
+        if config['JK'] == "concat":
+            pool = GlobalAttention(gate_nn = torch.nn.Linear((config['num_layer'] + 1) * config['emb_dim'], 1))
+        else:
+            pool = GlobalAttention(gate_nn = torch.nn.Linear(config['emb_dim'], 1))
+    elif config['pooling'] == "set2set":
+        set2set_iter = 2 # 
+        if config['JK'] == "concat":
+            pool = Set2Set((config['num_layer'] + 1) * config['emb_dim'], set2set_iter)
+        else:
+            pool = Set2Set(config['emb_dim'], set2set_iter)
+    elif config['pooling'] == 'conv':
+        poolList = []
+        poolList.append(global_add_pool)
+        poolList.append(global_mean_pool)
+        poolList.append(global_max_pool)
+        poolList.append(GlobalAttention(gate_nn = torch.nn.Linear(self.emb_dim, 1)))
+        poolList.append(Set2Set(config['emb_dim'], 2))
+        pool = nn.Conv1d(len(poolList), 1, 2, stride=2)
+    elif config['pooling'] == 'edge':
+        pool = []
+        pool.extend([EdgePooling(config['emb_dim']).cuda() for _ in range(config['num_layer'])])
+
+    else:
+        raise ValueError("Invalid graph pooling type.")
+    
+    return pool

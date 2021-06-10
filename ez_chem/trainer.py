@@ -1,8 +1,19 @@
 import sys
 from helper import *
 from data import *
-#from model import *
 from models import *
+
+def train_model(config):
+    if config['model'] in ['physnet']:
+        return train_physnet
+    else:
+        return train
+
+def test_model(config):
+    if config['model'] in ['physnet']:
+        return test_physnet
+    else:
+        return test
 
 def cv_train(config, table):
     results = []
@@ -47,7 +58,7 @@ def cv_train(config, table):
     sys.stdout.flush()
     return np.average(results)
 
-def train(model, optimizer, dataloader, config):
+def train(model, optimizer, dataloader, config, scheduler=None):
     '''
     Define loss and backpropagation
     '''
@@ -77,10 +88,16 @@ def train(model, optimizer, dataloader, config):
         if config['optimizer'] in ['sgd']:
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.)
         optimizer.step()
+        if config['scheduler'] == 'NoamLR':
+             scheduler.step()
     if config['propertyLevel'] == 'atom':
         return all_loss.item() / all_atoms.item()
     if config['propertyLevel'] == 'molecule':
-        return np.sqrt(all_loss / len(dataloader.dataset))
+        if config['metrics'] == 'l2':
+            return np.sqrt(all_loss / len(dataloader.dataset))
+        else:
+            return all_loss / len(dataloader.dataset)
+            
 
 def test(model, dataloader, config):
     '''
@@ -91,26 +108,28 @@ def test(model, dataloader, config):
     if config['propertyLevel'] == 'atom':
         total_N = 0
     with torch.no_grad():
-       for data in dataloader:
-           data = data.to(config['device'])
-           if config['taskType'] == 'single' and config['propertyLevel'] == 'molecule':
+        for data in dataloader:
+            data = data.to(config['device'])
+            if config['taskType'] == 'single' and config['propertyLevel'] == 'molecule':
                error += get_metrics_fn(config['metrics'])(model(data)[0], data.y) * data.num_graphs
-           elif config['taskType'] == 'multi' and config['dataset'] == 'calcSolLogP/ALL':
+            elif config['taskType'] == 'multi' and config['dataset'] == 'calcSolLogP/ALL':
                y0, _ = model(data)
                #error += (get_metrics_fn(config['loss'])(y0[:,0], data.y) + get_metrics_fn(config['loss'])(y0[:,1], data.y1) + get_metrics_fn(config['loss'])(y0[:,2], data.y2))*data.num_graphs
                error += get_metrics_fn(config['metrics'])(y0[:,0], data.y) * data.num_graphs
-           elif config['propertyLevel'] == 'atom':
+            elif config['propertyLevel'] == 'atom':
                total_N += data.mask.sum().item()
                error += get_metrics_fn(config['metrics'])(model(data)[0][data.mask>0].reshape(-1,1), data.y[data.mask>0].reshape(-1,1))*data.mask.sum().item()
-           else:
+            else:
                raise "MetricsError"
        
-       if config['dataset'] in ['qm9/u0']:
-           return error.item() / len(dataloader.dataset) # MAE
-       elif config['propertyLevel'] == 'atom' and config['dataset'] in ['nmr/hydrogen', 'nmr/carbon', 'qm9/nmr/carbon', 'qm9/nmr/hydrogen', 'qm9/nmr/allAtoms', 'qm9/nmr/carbon/smaller']:
-           return error.item() / total_N # MAE
-       else:
-           return math.sqrt(error / len(dataloader.dataset)) # RMSE for ws, logp, mp, etc.
+        if config['dataset'] in ['qm9/u0']:
+            return error.item() / len(dataloader.dataset) # MAE
+        elif config['propertyLevel'] == 'atom' and config['dataset'] in ['nmr/hydrogen', 'nmr/carbon', 'qm9/nmr/carbon', 'qm9/nmr/hydrogen', 'qm9/nmr/allAtoms', 'qm9/nmr/carbon/smaller']:
+            return error.item() / total_N # MAE
+        elif config['metrics'] == 'l2':
+            return np.sqrt(error.item() / len(dataloader.dataset)) # RMSE for ws, logp, mp, etc.
+        elif config['metrics'] == 'l1':
+            return error.item() / len(dataloader.dataset) 
 
 def train_dropout(model, optimizer, dataloader, config):
     model.train()
@@ -343,3 +362,68 @@ def test_swag_uncertainty(model, K_test, dataloader, config):
             MC_samples.append([y_pred, y_true])
     return MC_samples
 
+def train_physnet(model, optimizer, dataloader, config, scheduler=None):
+    '''
+    Define loss and backpropagation
+    '''
+    model.train()
+    all_loss = 0
+    all_atoms = 0
+
+    for data in dataloader:
+        data = data.to(config['device'])
+        optimizer.zero_grad()
+        y0, _ = model(data)
+        
+        if config['mask']: # for qm9/nmr/carbon or Exp. nmr/carbon nmr/hydrogen
+            loss = get_loss_fn(config['loss'])(data.y[data.mask>0], y0.float().view(-1)[data.mask>0])
+            all_atoms += data.mask.sum()
+            all_loss += loss.item()*data.mask.sum()
+        else:
+            if config['dataset'] in ['sol_calc/ALL', 'sol_calc/ALL/COMPLETE']:
+                loss = get_loss_fn(config['loss'])(data.CalcSol, y0.view(-1))*data.E.size()[0] # data.CalcSol is only for water solvation energy
+                all_loss += loss.item()
+            elif config['dataset'] in ['qm9/u0']:
+                loss = get_loss_fn(config['loss'])(data.y, y0.float().view(-1))*data.y.size()[0]
+                all_loss += loss.item()
+            else: # for qm9/nmr/allAtoms
+                loss = get_loss_fn(config['loss'])(data.y, y0.float().view(-1)) #MSE
+                all_atoms += data.N.sum()
+                all_loss += loss.item()*data.N.sum()
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 1000.)
+        optimizer.step()
+        if config['scheduler'] in ['NoamLR', 'step']:
+            scheduler.step()
+    if config['dataset'] in ['sol_calc/ALL', 'sol_calc/ALL/COMPLETE', 'qm9/u0']: 
+        return np.sqrt((all_loss / len(dataloader.dataset)))
+    else:
+        return (all_loss / all_atoms.item()).sqrt().item()
+
+def test_physnet(model, dataloader, config):
+    '''
+    taskType
+    '''
+    model.eval()
+    error = 0
+    total_N = 0
+    with torch.no_grad():
+       for data in dataloader:
+           data = data.to(config['device'])
+           if config['mask']:
+               error += get_metrics_fn(config['metrics'])(model(data)[0].view(-1)[data.mask>0], data.y[data.mask>0])*data.mask.sum().item()
+               total_N += data.mask.sum().item()
+           else:
+               if config['dataset'] in ['sol_calc/ALL', 'sol_calc/ALL/COMPLETE']:
+                   error += get_metrics_fn(config['metrics'])(model(data)[0].view(-1), data.CalcSol)*data.E.size()[0]
+               elif config['dataset'] in ['qm9/u0']:
+                   #print(data.y.size()[0])
+                   #sys.stdout.flush()
+                   error += get_metrics_fn(config['metrics'])(model(data)[0].view(-1), data.y)*data.y.size()[0]
+               else:
+                   total_N += data.N.sum().item()
+                   error += get_metrics_fn(config['metrics'])(model(data)[0].view(-1), data.y)*data.N.sum().item()
+       if config['dataset'] in ['sol_calc/ALL', 'sol_calc/ALL/COMPLETE', 'qm9/u0']:
+           return error.item() / len(dataloader.dataset) # MAE
+       else:
+           return error.item() / total_N # MAE

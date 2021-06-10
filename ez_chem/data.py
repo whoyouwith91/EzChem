@@ -1,4 +1,6 @@
 from dataProcess import *
+from DummyIMDataset import DummyIMDataset
+from utils_functions import collate_fn
 
 class get_split_data():
    def __init__(self, config):
@@ -17,7 +19,7 @@ class get_data_loader():
 
       if self.name == None:
          raise ValueError('Please specify one dataset you want to work on!')
-      if self.model in ['1-GNN', '1-2-GNN', '1-2-GNN_dropout', '1-2-GNN_swag', '1-2-efgs-GNN', '1-efgs-GNN', '1-interaction-GNN']:
+      if self.model in ['1-GNN', '1-2-GNN', '1-2-GNN_dropout', '1-2-GNN_swag', '1-2-efgs-GNN', '1-efgs-GNN', '1-interaction-GNN', 'physnet']:
          self.train_loader, self.val_loader, self.test_loader, self.std, self.num_features, self.num_bond_features, self.num_i_2 = self.graph_loader()
       if self.model in ['VAE', 'TransformerUnsuper']:
          self.tokenizer = MolTokenizer(vocab_file=os.path.join(self.config['vocab_path'], self.config['vocab_name']))
@@ -76,6 +78,11 @@ class get_data_loader():
 
          return train_loader,  val_loader, test_loader, None, num_features, num_bond_features, None
 
+      elif self.config['model'] in ['physnet']:
+         #if self.config['dataset'] == 'qm9':
+         #data = QM9(root=self.config['data_path'], pre_transform=my_pre_transform)
+         dataset = DummyIMDataset(root=self.config['data_path'], dataset_name='processed.pt')
+         num_i_2 = None
       else: # 1-GNN
          if self.config['dataset'] == 'calcSolLogP/ALL':
             dataset = knnGraph_multi(root=self.config['data_path'])
@@ -88,7 +95,10 @@ class get_data_loader():
             dataset = knnGraph(root=self.config['data_path'])
             num_i_2 = None
       num_features = dataset.num_features
-      num_bond_features = dataset[0]['edge_attr'].shape[1]
+      if self.config['model'] not in ['physnet']:
+         num_bond_features = dataset[0]['edge_attr'].shape[1]
+      else:
+         num_bond_features = 0
           
       my_split_ratio = [self.train_size, self.val_size]  #my dataseet
       if self.config['normalize']:
@@ -102,9 +112,14 @@ class get_data_loader():
       #rest_dataset = rest_dataset.shuffle()  ## can be used on CV
       train_dataset, val_dataset = rest_dataset[:my_split_ratio[0]], rest_dataset[my_split_ratio[0]:]
 
-      test_loader = DataLoader(test_dataset, batch_size=self.config['batch_size'], num_workers=0)
-      val_loader = DataLoader(val_dataset, batch_size=self.config['batch_size'], num_workers=0)
-      train_loader = DataLoader(train_dataset, batch_size=self.config['batch_size'], num_workers=0, shuffle=True)
+      if self.config['model'] in ['physnet']:
+         test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=self.config['batch_size'], num_workers=0, collate_fn=collate_fn)
+         val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=self.config['batch_size'], num_workers=0, collate_fn=collate_fn)
+         train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=self.config['batch_size'], num_workers=0, shuffle=True, collate_fn=collate_fn)
+      else:
+         test_loader = DataLoader(test_dataset, batch_size=self.config['batch_size'], num_workers=0)
+         val_loader = DataLoader(val_dataset, batch_size=self.config['batch_size'], num_workers=0)
+         train_loader = DataLoader(train_dataset, batch_size=self.config['batch_size'], num_workers=0, shuffle=True)
       #part_train_loader = DataLoader(train_dataset[:10000], batch_size=self.config['batch_size'], num_workers=0)
       return train_loader, val_loader, test_loader, std, num_features, num_bond_features, num_i_2
 

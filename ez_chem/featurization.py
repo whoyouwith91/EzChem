@@ -1,6 +1,6 @@
 from typing import List, Tuple, Union
 from rdkit import Chem
-from descriptastorus.descriptors import rdDescriptors, rdNormalizedDescriptors
+#from descriptastorus.descriptors import rdDescriptors, rdNormalizedDescriptors
 
 #__all__ = [get_atom_fdim, get_bond_fdim, MolGraph]
 

@@ -8,9 +8,13 @@ from utils_functions import collate_fn
 from utils_functions import add_parser_arguments
 from PhysDimeNet import PhysDimeNet
 from utils_functions import floating_type
+from Optimizers import EmaAmsGrad
 import torch
 import torch.nn.functional as F
+import numpy as np
 from prettytable import PrettyTable
+from helper import *
+
 
 net_kwargs = {
         'n_atom_embedding': 95,
@@ -34,9 +38,19 @@ net_kwargs = {
         'bonding_type': 'BN BN BN',
         'uncertainty_modify': 'none',
         'coulomb_charge_correct': False,
-        'action': 'NMR',
         'target_names': ['NMR_chemical_shift'],
-        'requires_embedding': False
+        'requires_embedding': False,
+        'scheduler': 'NoamLR',
+        'patience_epochs': 10,
+        'epochs': 300,
+        'warmup_epochs': 2,
+        'const_lr': 0.001, 
+        'init_lr': 0.0001,
+        'max_lr': 0.001,
+        'final_lr': 0.0001,
+        'batch_size': 64,
+        'model': 'physnet',
+        'early_stopping': False
         }
 
 device = torch.device("cuda:" + str(0)) if torch.cuda.is_available() else torch.device("cpu")
@@ -177,7 +191,7 @@ class NMR(InMemoryDataset):
 
         torch.save(self.collate(data_list), self.processed_paths[0])
 
-def train(model, optimizer, dataloader, mask=False):
+def train(model, optimizer, dataloader, config):
     '''
     Define loss and backpropagation
     '''
@@ -190,20 +204,28 @@ def train(model, optimizer, dataloader, mask=False):
         optimizer.zero_grad()
         y0, _ = model(data)
         
-        if mask:
-            loss = F.mse_loss(data.y[data.mask>0], y0.float().view(-1)[data.mask>0])
+        if config['mask']:
+            loss = F.mse_loss(data.y[data.mask>0], y0.view(-1)[data.mask>0])
             all_atoms += data.mask.sum()
             all_loss += loss.item()*data.mask.sum()
         else:
-            loss = F.mse_loss(data.y, y0.float().view(-1))
-            all_atoms += data.N.sum()
-            all_loss += loss.item()*data.N.sum()
+            if config['dataset'] == 'sol_calc/ALL':
+                loss = F.mse_loss(data.CalcSol, y0.view(-1))*data.E.size()[0]
+                all_loss += loss.item()
+            else:
+                loss = F.mse_loss(data.y, y0.view(-1))
+                all_atoms += data.N.sum()
+                all_loss += loss.item()*data.N.sum()
         loss.backward()
         optimizer.step()
-        
-    return (all_loss / all_atoms.item()).sqrt()
+        if config['scheduler'] == 'NoamLR':
+            scheduler.step()
+    if config['dataset'] == 'sol_calc/ALL': 
+        return np.sqrt((all_loss / len(dataloader.dataset)))
+    else:
+        return (all_loss / all_atoms.item()).sqrt()
 
-def test(model, dataloader, mask=False):
+def test(model, dataloader, config):
     '''
     taskType
     '''
@@ -213,18 +235,34 @@ def test(model, dataloader, mask=False):
     with torch.no_grad():
        for data in dataloader:
            data = data.to(device)
-           if mask:
+           if config['mask']:
                error += F.l1_loss(model(data)[0].view(-1)[data.mask>0], data.y[data.mask>0])*data.mask.sum().item()
                total_N += data.mask.sum().item()
            else:
-                total_N += data.N.sum().item()
-                error += F.l1_loss(model(data)[0].view(-1), data.y)*data.N.sum().item()
-       return error.item() / total_N # MAE
+               if config['dataset'] == 'sol_calc/ALL':
+                   error += F.l1_loss(model(data)[0].view(-1), data.CalcSol)*data.E.size()[0]
+               else:
+                   total_N += data.N.sum().item()
+                   error += F.l1_loss(model(data)[0].view(-1), data.y)*data.N.sum().item()
+       if config['dataset'] == 'sol_calc/ALL':
+           return error.item() / len(dataloader.dataset) # MAE
+       else:
+           return error.item() / total_N # MAE
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--dataset')
-args = parser.parse_args()
+parser.add_argument('--dataset', type=str)
+parser.add_argument('--mask', action='store_true')
+parser.add_argument('--finetuning', action='store_true')
+parser.add_argument('--running_path', type=str)
+parser.add_argument('--action', type=str)
+parser.add_argument('--optimizer', type=str)
 
+args = parser.parse_args()
+this_dic = net_kwargs
+this_dic['dataset'] = args.dataset
+this_dic['action'] = args.action
+this_dic['mask'] = args.mask
+this_dic['running_path'] = args.running_path
 if args.dataset == 'qm9':
     data = QM9(root='/scratch/dz1061/gcn/chemGraph/data/qm9', pre_transform=my_pre_transform)
     dataset = DummyIMDataset(root="/scratch/dz1061/gcn/chemGraph/data/qm9", dataset_name='data_nmr.pt')
@@ -234,6 +272,9 @@ elif args.dataset == 'nmr/carbon':
 elif args.dataset == 'nmr/hydrogen':
     data = NMR(root='/scratch/dz1061/gcn/chemGraph/data/nmr/hydrogen', pre_transform=my_pre_transform)
     dataset = DummyIMDataset(root="/scratch/dz1061/gcn/chemGraph/data/nmr/hydrogen", dataset_name='data_nmr.pt')
+elif args.dataset == 'sol_calc/ALL':
+    #data = NMR(root='/scratch/dz1061/gcn/chemGraph/data/{}'.format(args.dataset), pre_transform=my_pre_transform)
+    dataset = DummyIMDataset(root="/scratch/dz1061/gcn/chemGraph/data/{}/graphs/base/physnet".format(args.dataset), dataset_name='data_nmr.pt')
 else:
     pass
 
@@ -243,26 +284,55 @@ elif args.dataset == 'nmr/carbon':
     train_size, valid_size = 20000, 1487
 elif args.dataset == 'nmr/hydrogen':
     train_size, valid_size = 9194, 1000
+elif args.dataset == 'sol_calc/ALL':
+    train_size, valid_size = 452409, 56552
+this_dic['train_size'] = train_size
+with open(os.path.join(this_dic['running_path'], 'config.json'), 'w') as f:
+    json.dump(this_dic, f, indent=2)
 
-train_loader = torch.utils.data.DataLoader(dataset[:train_size], batch_size=64, collate_fn=collate_fn, shuffle=True, num_workers=0)
-val_loader = torch.utils.data.DataLoader(dataset[train_size:train_size+valid_size], batch_size=64, collate_fn=collate_fn, num_workers=0)
-test_loader = torch.utils.data.DataLoader(dataset[train_size+valid_size:], batch_size=64, collate_fn=collate_fn, num_workers=0)
+train_loader = torch.utils.data.DataLoader(dataset[:train_size], batch_size=this_dic['batch_size'], collate_fn=collate_fn, shuffle=True, num_workers=0)
+val_loader = torch.utils.data.DataLoader(dataset[train_size:train_size+valid_size], batch_size=this_dic['batch_size'], collate_fn=collate_fn, num_workers=0)
+test_loader = torch.utils.data.DataLoader(dataset[train_size+valid_size:], batch_size=this_dic['batch_size'], collate_fn=collate_fn, num_workers=0)
 
-model = PhysDimeNet(**net_kwargs)
+model = PhysDimeNet(**this_dic)
 net = model.type(floating_type).to(device)
-optimizer = torch.optim.Adam(net.parameters(), lr=0.001)
-scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, factor=0.9, patience=5, min_lr=0.00001)
+if args.finetuning:
+    net.load_state_dict(torch.load('/scratch/dz1061/gcn/chemGraph/results/qm9/nmr/allAtoms/physnet/best_model/model_best.pt'))
+
+if args.optimizer == 'EMA':
+    shadow_net = PhysDimeNet(**this_dic)
+    shadow_net = shadow_net.to(device)
+    shadow_net = shadow_net.type(floating_type)
+    shadow_net.load_state_dict(net.state_dict())
+    optimizer = EmaAmsGrad(net.parameters(), shadow_net, lr=this_dic['const_lr'], ema=0.999)
+else:
+    optimizer = torch.optim.Adam(net.parameters(), lr=this_dic['const_lr'])
+scheduler = build_lr_scheduler(optimizer, this_dic)
 
 x = PrettyTable()
 x.field_names = ['Epoch', 'LR', 'Train MSE', 'Valid MAE', 'Test MAE']
+best_val_error = float("inf")
 for epoch in range(300):
-    lr = scheduler.optimizer.param_groups[0]['lr']
+    if this_dic['scheduler'] == 'const': lr = this_dic['lr']
+    elif this_dic['scheduler'] == 'decay': lr = scheduler.optimizer.param_groups[0]['lr']
+    else: lr = scheduler.get_lr()
 
-    loss = train(net, optimizer, train_loader, mask=True)
-    val_error = test(net, val_loader, mask=True)
-    test_error = test(net, test_loader, mask=True)
-    scheduler.step(val_error)
+    loss = train(net, optimizer, train_loader, this_dic)
+    if args.optimizer == 'EMA':
+        shadow_net = optimizer.shadow_model
+        val_error = test(shadow_net, val_loader, this_dic)
+        test_error = test(shadow_net, test_loader, this_dic)
+    else:
+        val_error = test(net, val_loader, this_dic)
+        test_error = test(net, test_loader, this_dic)
+    if this_dic['scheduler'] == 'decay':
+        scheduler.step(val_error)
 
+    if args.optimizer == 'EMA':
+        best_val_error = saveModel(this_dic, epoch, shadow_net, best_val_error, val_error)
+    else:
+        best_val_error = saveModel(this_dic, epoch, net, best_val_error, val_error)
     x.add_row([str(epoch), lr, loss.item(), val_error, test_error])
-    print(x)
-    sys.stdout.flush()
+    saveToResultsFile(x, this_dic, name='data.txt')
+    #sys.stdout.flush()
+torch.save(net.state_dict(), os.path.join(this_dic['running_path'], 'trained_model', 'model_last.pt'))
