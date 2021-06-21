@@ -2,6 +2,7 @@ import sys
 from helper import *
 from data import *
 from models import *
+from utils_functions import floating_type
 
 def train_model(config):
     if config['model'] in ['physnet']:
@@ -373,25 +374,25 @@ def train_physnet(model, optimizer, dataloader, config, scheduler=None):
     for data in dataloader:
         data = data.to(config['device'])
         optimizer.zero_grad()
-        y0, _ = model(data)
+        y0 = model(data)
         
         if config['mask']: # for qm9/nmr/carbon or Exp. nmr/carbon nmr/hydrogen
-            loss = get_loss_fn(config['loss'])(data.y[data.mask>0], y0.float().view(-1)[data.mask>0])
+            loss = get_loss_fn(config['loss'])(data.y[data.mask>0], y0['atom_prop'].float().view(-1)[data.mask>0])
             all_atoms += data.mask.sum()
             all_loss += loss.item()*data.mask.sum()
         else:
             if config['dataset'] in ['sol_calc/ALL', 'sol_calc/ALL/COMPLETE']:
-                loss = get_loss_fn(config['loss'])(data.CalcSol, y0.view(-1))*data.E.size()[0] # data.CalcSol is only for water solvation energy
-                all_loss += loss.item()
+                loss = get_loss_fn(config['loss'])(data.CalcSol, y0['mol_prop'].view(-1)) # data.CalcSol is only for water solvation energy
+                all_loss += loss.item()*data.E.size()[0]
             elif config['dataset'] in ['qm9/u0']:
-                loss = get_loss_fn(config['loss'])(data.y, y0.float().view(-1))*data.y.size()[0]
-                all_loss += loss.item()
+                loss = get_loss_fn(config['loss'])(data.E, y0['mol_prop'].float().view(-1))
+                all_loss += loss.item()*data.E.size()[0]
             else: # for qm9/nmr/allAtoms
-                loss = get_loss_fn(config['loss'])(data.y, y0.float().view(-1)) #MSE
+                loss = get_loss_fn(config['loss'])(data.y, y0['atom_prop'].float().view(-1)) + y0["nh_loss"]
                 all_atoms += data.N.sum()
                 all_loss += loss.item()*data.N.sum()
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), 1000.)
+        #torch.nn.utils.clip_grad_norm_(model.parameters(), 1000.)
         optimizer.step()
         if config['scheduler'] in ['NoamLR', 'step']:
             scheduler.step()
@@ -408,22 +409,20 @@ def test_physnet(model, dataloader, config):
     error = 0
     total_N = 0
     with torch.no_grad():
-       for data in dataloader:
+        for data in dataloader:
            data = data.to(config['device'])
            if config['mask']:
-               error += get_metrics_fn(config['metrics'])(model(data)[0].view(-1)[data.mask>0], data.y[data.mask>0])*data.mask.sum().item()
+               error += get_metrics_fn(config['metrics'])(model(data)['atom_prop'].view(-1)[data.mask>0], data.y[data.mask>0])*data.mask.sum().item()
                total_N += data.mask.sum().item()
            else:
                if config['dataset'] in ['sol_calc/ALL', 'sol_calc/ALL/COMPLETE']:
-                   error += get_metrics_fn(config['metrics'])(model(data)[0].view(-1), data.CalcSol)*data.E.size()[0]
+                   error += get_metrics_fn(config['metrics'])(model(data)['mol_prop'].view(-1), data.CalcSol)*data.E.size()[0]
                elif config['dataset'] in ['qm9/u0']:
-                   #print(data.y.size()[0])
-                   #sys.stdout.flush()
-                   error += get_metrics_fn(config['metrics'])(model(data)[0].view(-1), data.y)*data.y.size()[0]
+                   error += get_metrics_fn(config['metrics'])(model(data)['mol_prop'].view(-1), data.E)*data.E.size()[0]
                else:
                    total_N += data.N.sum().item()
-                   error += get_metrics_fn(config['metrics'])(model(data)[0].view(-1), data.y)*data.N.sum().item()
-       if config['dataset'] in ['sol_calc/ALL', 'sol_calc/ALL/COMPLETE', 'qm9/u0']:
+                   error += get_metrics_fn(config['metrics'])(model(data)['atom_prop'].view(-1), data.y)*data.N.sum().item()
+        if config['dataset'] in ['sol_calc/ALL', 'sol_calc/ALL/COMPLETE', 'qm9/u0']:
            return error.item() / len(dataloader.dataset) # MAE
-       else:
+        else:
            return error.item() / total_N # MAE

@@ -894,7 +894,7 @@ class DNN(torch.nn.Module):
         self.linear2 = nn.Linear(hidden_size, out_size)
         self.activation = activation
         
-    def forward(self, X):
+    def forward(self, X, atom_mol_batch):
         out = self.linear1(X)
         for linear, bn in zip(self.hiddens, self.bn_hiddens):
             if self.bn:
@@ -905,6 +905,7 @@ class DNN(torch.nn.Module):
             out = self.bn(out)
         out = self.activation(out)
         out = self.linear2(out)
+        out = scatter(reduce='add', src=out, index=atom_mol_batch, dim=0)
         return out
 
 if __name__ == "__main__":

@@ -20,5 +20,6 @@ physnet_kwargs = {
         'uncertainty_modify': 'none',
         'coulomb_charge_correct': False,
         'target_names': ['NMR_chemical_shift'],
-        'requires_embedding': False
+        'requires_embedding': True,
+        'requires_atom_prop': True,
         }

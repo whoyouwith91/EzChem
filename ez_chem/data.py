@@ -1,6 +1,7 @@
 from dataProcess import *
 from DummyIMDataset import DummyIMDataset
-from utils_functions import collate_fn
+from utils_functions import collate_fn # sPhysnet
+import torch
 
 class get_split_data():
    def __init__(self, config):
@@ -15,7 +16,14 @@ class get_data_loader():
       self.config = config
       self.name = config['dataset']
       self.model = config['model']
-      self.train_size, self.val_size = config['train_size'], config['val_size']
+      if config['explicit_split']:
+         all_index = torch.load('/scratch/projects/yzlab/group/temp_sx/qm9_processed/qm9_split.pt')
+         self.train_index = all_index['train_index'].tolist()
+         self.valid_index = all_index['valid_index'].tolist()
+         self.test_index = all_index['test_index'].tolist()
+         self.train_size, self.val_size = config['train_size'], config['val_size']
+      else:
+         self.train_size, self.val_size = config['train_size'], config['val_size']
 
       if self.name == None:
          raise ValueError('Please specify one dataset you want to work on!')
@@ -113,9 +121,14 @@ class get_data_loader():
       train_dataset, val_dataset = rest_dataset[:my_split_ratio[0]], rest_dataset[my_split_ratio[0]:]
 
       if self.config['model'] in ['physnet']:
-         test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=self.config['batch_size'], num_workers=0, collate_fn=collate_fn)
-         val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=self.config['batch_size'], num_workers=0, collate_fn=collate_fn)
-         train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=self.config['batch_size'], num_workers=0, shuffle=True, collate_fn=collate_fn)
+         if self.config['explicit_split']:
+            test_loader = torch.utils.data.DataLoader(dataset[self.test_index], batch_size=self.config['batch_size'], num_workers=0, collate_fn=collate_fn)
+            val_loader = torch.utils.data.DataLoader(dataset[self.valid_index], batch_size=self.config['batch_size'], num_workers=0, collate_fn=collate_fn)
+            train_loader = torch.utils.data.DataLoader(dataset[self.train_index], batch_size=self.config['batch_size'], num_workers=0, shuffle=True, collate_fn=collate_fn)
+         else:
+            test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=self.config['batch_size'], num_workers=0, collate_fn=collate_fn)
+            val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=self.config['batch_size'], num_workers=0, collate_fn=collate_fn)
+            train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=self.config['batch_size'], num_workers=0, shuffle=True, collate_fn=collate_fn)
       else:
          test_loader = DataLoader(test_dataset, batch_size=self.config['batch_size'], num_workers=0)
          val_loader = DataLoader(val_dataset, batch_size=self.config['batch_size'], num_workers=0)

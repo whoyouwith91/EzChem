@@ -17,7 +17,7 @@ from BesselCalculator import bessel_expansion_raw
 from BesselCalculatorFast import BesselCalculator
 from utils_functions import floating_type, device, dime_edge_expansion, softplus_inverse, \
     gaussian_rbf, info_resolver, expansion_splitter, error_message, option_solver
-
+from tags import tags
 
 class PhysDimeNet(nn.Module):
     """
@@ -25,6 +25,8 @@ class PhysDimeNet(nn.Module):
     For non-bonding interaction, using atom-atom interaction in PhysNet
     For bonding interaction, using directional message passing
     Final prediction is the combination of PhysNet and DimeNet
+
+    Next time I will use **kwargs :<
     """
 
     def __init__(self,
@@ -55,7 +57,8 @@ class PhysDimeNet(nn.Module):
                  target_names=None,
                  batch_norm=False,
                  dropout=False,
-                 requires_embedding=False,
+                 requires_atom_prop=False,
+                 get_atom_embedding=False,
                  **kwargs):
         """
         
@@ -70,11 +73,16 @@ class PhysDimeNet(nn.Module):
         :param debug_mode: 
         """
         super().__init__()
-        print("------unused keys-----")
-        for key in kwargs:
-            print("{}: {}".format(key, kwargs[key]))
+        #print("------unused keys in model-----")
+        #for key in kwargs:
+        #    print("{}: {}".format(key, kwargs[key]))
 
-        self.requires_embedding = requires_embedding
+        #self.logger = logging.getLogger()
+        self.requires_atom_prop = requires_atom_prop
+        self.get_atom_embedding = get_atom_embedding
+        if action in tags.requires_atomic_prop:
+            #self.logger.info("Overwriting self.requires_atom_prop = True because you require atomic props")
+            self.requires_atom_prop = True
         # convert input into a dictionary
         self.target_names = target_names
         self.action = action
@@ -83,28 +91,28 @@ class PhysDimeNet(nn.Module):
         self.expansion_fn = expansion_splitter(expansion_fn)
 
         self.activations = activations.split(' ')
-        modules = modules.split()
-        bonding_type = bonding_type.split()
+        module_str_list = modules.split()
+        bonding_str_list = bonding_type.split()
         # main modules, including P (PhysNet), D (DimeNet), etc.
-        self.modules = []
-        self.bonding_type = []
+        self.main_module_str = []
+        self.main_bonding_str = []
         # post modules are either C (Coulomb) or D3 (D3 Dispersion)
-        self.post_modules = []
-        self.post_bonding_type = []
-        for this_module, this_bonding_type in zip(modules, bonding_type):
+        self.post_module_str = []
+        self.post_bonding_str = []
+        for this_module_str, this_bonding_str in zip(module_str_list, bonding_str_list):
             '''
             Separating main module and post module
             '''
-            this_module = this_module.split('[')[0]
-            if this_module in ['D', 'P', 'D-noOut', 'P-noOut']:
-                self.modules.append(this_module)
-                self.bonding_type.append(this_bonding_type)
-            elif this_module in ['C', 'D3']:
-                self.post_modules.append(this_module)
-                self.post_bonding_type.append(this_bonding_type)
+            this_module_str = this_module_str.split('[')[0]
+            if this_module_str in ['D', 'P', 'D-noOut', 'P-noOut']:
+                self.main_module_str.append(this_module_str)
+                self.main_bonding_str.append(this_bonding_str)
+            elif this_module_str in ['C', 'D3']:
+                self.post_module_str.append(this_module_str)
+                self.post_bonding_str.append(this_bonding_str)
             else:
-                error_message(this_module, 'module')
-        self.bonding_type_keys = set(bonding_type)
+                error_message(this_module_str, 'module')
+        self.bonding_type_keys = set(bonding_str_list)
 
         # whether calculate long range interaction or not
         self.contains_lr = False
@@ -112,14 +120,14 @@ class PhysDimeNet(nn.Module):
             if _bonding_type.find('L') >= 0:
                 self.contains_lr = True
 
-        module_bond_combination = []
+        module_bond_combine_str = []
         msg_bond_type = []
-        for module, bond in zip(modules, bonding_type):
+        for module, bond in zip(module_str_list, bonding_str_list):
             module = module.split('[')[0]
-            module_bond_combination.append('{}_{}'.format(module, bond))
+            module_bond_combine_str.append('{}_{}'.format(module, bond))
             if module == 'D':
                 msg_bond_type.append(bond)
-        self.module_bond_combination = set(module_bond_combination)
+        self.module_bond_combine_str = set(module_bond_combine_str)
         # These bonds need to be expanded into message version (i.e. 3 body interaction)
         self.msg_bond_type = set(msg_bond_type)
 
@@ -136,7 +144,7 @@ class PhysDimeNet(nn.Module):
         # A dictionary which parses an expansion combination into detailed information
         self.expansion_info_getter = {
             combination: info_resolver(self.expansion_fn[combination])
-            for combination in self.module_bond_combination
+            for combination in self.module_bond_combine_str
         }
 
         # registering necessary parameters for some expansions if needed
@@ -180,65 +188,78 @@ class PhysDimeNet(nn.Module):
         '''
         registering main modules
         '''
-        for i, (current_registering_module, bonding_type) in enumerate(zip(modules, bonding_type)):
+        self.main_module_list = nn.ModuleList()
+        # stores extra info including module type, bonding type, etc
+        self.main_module_info = []
+        for i, (module_str, bonding_str) in enumerate(zip(module_str_list, bonding_str_list)):
             # contents within '[]' will be considered options
-            _options = option_solver(current_registering_module)
-            current_registering_module = current_registering_module.split('[')[0]
-            combination = current_registering_module + "_" + bonding_type
-            if current_registering_module in ['D', 'D-noOut']:
+            _options = option_solver(module_str)
+            module_str = module_str.split('[')[0]
+            combination = module_str + "_" + bonding_str
+            if module_str in ['D', 'D-noOut']:
                 n_dime_rbf = self.expansion_info_getter[combination]['n']
                 n_srbf = self.expansion_info_getter[combination]['n_srbf']
                 n_shbf = self.expansion_info_getter[combination]['n_shbf']
                 dim_sbf = n_srbf * (n_shbf + 1)
-                this_module = DimeModule(dim_rbf=n_dime_rbf,
-                                         dim_sbf=dim_sbf,
-                                         dim_msg=n_feature,
-                                         n_output=n_output,
-                                         n_res_interaction=n_dime_before_residual,
-                                         n_res_msg=n_dime_after_residual,
-                                         n_dense_output=n_output_dense,
-                                         dim_bi_linear=n_bi_linear,
-                                         activation=self.activations[i],
-                                         uncertainty_modify=uncertainty_modify)
+                this_module_str = DimeModule(dim_rbf=n_dime_rbf,
+                                             dim_sbf=dim_sbf,
+                                             dim_msg=n_feature,
+                                             n_output=n_output,
+                                             n_res_interaction=n_dime_before_residual,
+                                             n_res_msg=n_dime_after_residual,
+                                             n_dense_output=n_output_dense,
+                                             dim_bi_linear=n_bi_linear,
+                                             activation=self.activations[i],
+                                             uncertainty_modify=uncertainty_modify)
                 if self.uncertainty_modify == 'concreteDropoutModule':
-                    this_module = ConcreteDropout(this_module, module_type='DimeNet')
-                self.add_module('module{}'.format(i), this_module)
+                    this_module_str = ConcreteDropout(this_module_str, module_type='DimeNet')
+                self.main_module_list.append(this_module_str)
+                self.main_module_info.append({"module_str": module_str, "bonding_str": bonding_str,
+                                              "combine_str": "{}_{}".format(module_str, bonding_str),
+                                              "is_transition": False})
                 if self.base_unit_getter[previous_module] == "atom":
-                    self.add_module('trans_layer{}'.format(i),
-                                    AtomToEdgeLayer(n_dime_rbf, n_feature, self.activations[i]))
-            elif current_registering_module in ['P', 'P-noOut']:
-                this_module = PhysModule(F=n_feature,
-                                         K=self.expansion_info_getter[combination]['n'],
-                                         n_output=n_output,
-                                         n_res_atomic=n_phys_atomic_res,
-                                         n_res_interaction=n_phys_interaction_res,
-                                         n_res_output=n_phys_output_res,
-                                         activation=self.activations[i],
-                                         uncertainty_modify=uncertainty_modify,
-                                         n_read_out=int(_options['n_read_out']) if 'n_read_out' in _options else 0,
-                                         batch_norm=batch_norm,
-                                         dropout=dropout)
+                    self.main_module_list.append(AtomToEdgeLayer(n_dime_rbf, n_feature, self.activations[i]))
+                    self.main_module_info.append({"is_transition": True})
+
+            elif module_str in ['P', 'P-noOut']:
+                this_module_str = PhysModule(F=n_feature,
+                                             K=self.expansion_info_getter[combination]['n'],
+                                             n_output=n_output,
+                                             n_res_atomic=n_phys_atomic_res,
+                                             n_res_interaction=n_phys_interaction_res,
+                                             n_res_output=n_phys_output_res,
+                                             activation=self.activations[i],
+                                             uncertainty_modify=uncertainty_modify,
+                                             n_read_out=int(_options['n_read_out']) if 'n_read_out' in _options else 0,
+                                             batch_norm=batch_norm,
+                                             dropout=dropout)
                 if self.uncertainty_modify == 'concreteDropoutModule':
-                    this_module = ConcreteDropout(this_module, module_type='PhysNet')
-                self.add_module('module{}'.format(i), this_module)
+                    this_module_str = ConcreteDropout(this_module_str, module_type='PhysNet')
+                self.main_module_list.append(this_module_str)
+                self.main_module_info.append({"module_str": module_str, "bonding_str": bonding_str,
+                                              "combine_str": "{}_{}".format(module_str, bonding_str),
+                                              "is_transition": False})
                 if self.base_unit_getter[previous_module] == "edge":
-                    self.add_module('trans_layer{}'.format(i), EdgeToAtomLayer())
-            elif current_registering_module in ['C', 'D3']:
+                    self.main_module_list.append(EdgeToAtomLayer())
+                    self.main_module_info.append({"is_transition": True})
+            elif module_str in ['C', 'D3']:
                 pass
             else:
-                error_message(current_registering_module, 'module')
-            previous_module = current_registering_module
+                error_message(module_str, 'module')
+            previous_module = module_str
 
-        for i, (current_registering_module, bonding_type) in enumerate(zip(self.post_modules, self.post_bonding_type)):
-            if current_registering_module == 'C':
-                combination = current_registering_module + "_" + bonding_type
+        # TODO Post modules to list
+        for i, (module_str, bonding_str) in enumerate(zip(self.post_module_str, self.post_bonding_str)):
+            if module_str == 'C':
+                combination = module_str + "_" + bonding_str
                 self.add_module('post_module{}'.format(i),
                                 CoulombLayer(cutoff=self.expansion_info_getter[combination]['dist']))
-            elif current_registering_module == 'D3':
+            elif module_str == 'D3':
                 self.add_module('post_module{}'.format(i), D3DispersionLayer(s6=0.5, s8=0.2130, a1=0.0, a2=6.0519))
             else:
-                error_message(current_registering_module, 'module')
+                error_message(module_str, 'module')
 
+        # TODO normalize to list
         if self.normalize:
             '''
             Atom-wise shift and scale, used in PhysNet
@@ -276,8 +297,8 @@ class PhysDimeNet(nn.Module):
             # Freeze scale, shift and Gaussian RBF parameters
             for param in self.parameters():
                 param.requires_grad_(False)
-        for i in range(len(self.modules)):
-            getattr(self, 'module{}'.format(i)).freeze_prev_layers()
+        for i in range(len(self.main_module_str)):
+            self.main_module_list[i].freeze_prev_layers()
 
     def forward(self, data):
         # torch.cuda.synchronize(device=device)
@@ -285,7 +306,6 @@ class PhysDimeNet(nn.Module):
 
         R = data.R.type(floating_type)
         Z = data.Z
-        #Q = data.Q
         N = data.N
         '''
         Note: non_bond_edge_index is for non-bonding interactions
@@ -293,25 +313,25 @@ class PhysDimeNet(nn.Module):
         '''
         atom_mol_batch = data.atom_mol_batch
         edge_index_getter = {}
-        for bonding_type in self.bonding_type_keys:
+        for bonding_str in self.bonding_type_keys:
             # prepare edge index
-            edge_index = getattr(data, bonding_type + '_edge_index', False)
+            edge_index = getattr(data, bonding_str + '_edge_index', False)
             if edge_index is not False:
-                edge_index_getter[bonding_type] = edge_index + getattr(data, bonding_type + '_edge_index_correct')
+                edge_index_getter[bonding_str] = edge_index + getattr(data, bonding_str + '_edge_index_correct')
             else:
-                edge_index_getter[bonding_type] = torch.cat(
-                    [data[_type + '_edge_index'] + data[_type + '_edge_index_correct'] for _type in bonding_type],
+                edge_index_getter[bonding_str] = torch.cat(
+                    [data[_type + '_edge_index'] + data[_type + '_edge_index_correct'] for _type in bonding_str],
                     dim=-1)
 
         msg_edge_index_getter = {}
-        for bonding_type in self.msg_bond_type:
+        for bonding_str in self.msg_bond_type:
             # prepare msg edge index
-            this_msg_edge_index = getattr(data, bonding_type + '_msg_edge_index', False)
+            this_msg_edge_index = getattr(data, bonding_str + '_msg_edge_index', False)
             if this_msg_edge_index is not False:
-                msg_edge_index_getter[bonding_type] = this_msg_edge_index + \
-                                                      getattr(data, bonding_type + '_msg_edge_index_correct')
+                msg_edge_index_getter[bonding_str] = this_msg_edge_index + \
+                                                     getattr(data, bonding_str + '_msg_edge_index_correct')
             else:
-                msg_edge_index_getter[bonding_type] = cal_msg_edge_index(edge_index_getter[bonding_type]).to(device)
+                msg_edge_index_getter[bonding_str] = cal_msg_edge_index(edge_index_getter[bonding_str]).to(device)
 
         # t0 = record_data('edge index prepare', t0)
 
@@ -319,11 +339,11 @@ class PhysDimeNet(nn.Module):
         '''
         calculating expansion
         '''
-        for combination in self.module_bond_combination:
-            module_name = combination.split('_')[0]
+        for combination in self.module_bond_combine_str:
+            module_str = combination.split('_')[0]
             this_bond = combination.split('_')[1]
             this_expansion = self.expansion_info_getter[combination]['name']
-            if module_name in ['D', 'D-noOut']:
+            if module_str in ['D', 'D-noOut']:
                 # DimeNet, calculate sbf and rbf
                 if this_expansion == "defaultDime":
                     n_srbf = self.expansion_info_getter[combination]['n_srbf']
@@ -333,91 +353,88 @@ class PhysDimeNet(nn.Module):
                                                                   self.expansion_info_getter[combination]['n'],
                                                                   self.dist_calculator,
                                                                   getattr(self, f"bessel_calculator_{n_srbf}_{n_shbf}"),
-                                                                  self.expansion_info_getter[combination]['dist'])
+                                                                  self.expansion_info_getter[combination]['dist'],
+                                                                  return_dict=True)
                 else:
                     raise ValueError("Double check your expansion input!")
-            elif module_name in ['P', 'P-noOut']:
+            elif module_str in ['P', 'P-noOut']:
                 # PhysNet, calculate rbf
                 if this_expansion == 'bessel':
                     this_edge_index = edge_index_getter[this_bond]
                     dist_atom = self.dist_calculator(R[this_edge_index[0, :], :], R[this_edge_index[1, :], :])
                     rbf = bessel_expansion_raw(dist_atom, self.expansion_info_getter[combination]['n'],
                                                self.expansion_info_getter[combination]['dist'])
-                    expansions[combination] = rbf
+                    expansions[combination] = {"rbf": rbf}
                 elif this_expansion == 'gaussian':
                     this_edge_index = edge_index_getter[this_bond]
                     pair_dist = self.dist_calculator(R[this_edge_index[0, :], :], R[this_edge_index[1, :], :])
                     expansions[combination] = gaussian_rbf(pair_dist, getattr(self, 'centers' + combination),
                                                            getattr(self, 'widths' + combination),
-                                                           getattr(self, 'cutoff' + combination))
+                                                           getattr(self, 'cutoff' + combination),
+                                                           return_dict=True)
                 else:
                     error_message(this_expansion, 'expansion')
-            elif (module_name == 'C') or (module_name == 'D3'):
+            elif (module_str == 'C') or (module_str == 'D3'):
                 '''
                 In this situation, we only need to calculate pair-wise distance.
                 '''
                 this_edge_index = edge_index_getter[this_bond]
-                expansions[combination] = self.dist_calculator(R[this_edge_index[0, :], :], R[this_edge_index[1, :], :])
+                # TODO pair dist was calculated twice here
+                expansions[combination] = {"pair_dist": self.dist_calculator(R[this_edge_index[0, :], :],
+                                                                             R[this_edge_index[1, :], :])}
             else:
                 # something went wrong
-                error_message(module_name, 'module')
+                error_message(module_str, 'module')
 
         # t0 = record_data('calculate rbf', t0)
 
         '''
-        mji: edge embedding
-        vi:  node embedding
+        mji: edge diff
+        vi:  node diff
         '''
         vi = self.embedding_layer(Z)
 
-        # t0 = record_data('embedding layer', t0)
+        # t0 = record_data('diff layer', t0)
 
         separated_last_out = {key: None for key in self.bonding_type_keys}
         separated_out_sum = {key: 0. for key in self.bonding_type_keys}
 
         nh_loss = torch.zeros(1).type(floating_type).to(device)
-        previous_module = 'P'
-        previous_bonding_type = None
         mji = None
-        out, regularization = 0., 0.
+        out_dict = {"vi": vi, "mji": mji}
         '''
         Going through main modules
         '''
-        for i, (module_name, bonding_type) in enumerate(zip(self.modules, self.bonding_type)):
-            # this_expansion: for DimeNet, you will get rbf_ji, sbf_kji; for PhysNet, you will get rbf
-            this_expansion = expansions["{}_{}".format(module_name, bonding_type)]
-            _module = self._modules['module{}'.format(i)]
-            if module_name in ['D', 'D-noOut']:
-                if self.base_unit_getter[previous_module] == "atom":
-                    mji = self._modules['trans_layer{}'.format(i)](vi, edge_index_getter[bonding_type],
-                                                                   this_expansion[0])
+        for info, _module in zip(self.main_module_info, self.main_module_list):
 
-                mji, out, regularization = _module(mji, *this_expansion, msg_edge_index_getter[bonding_type],
-                                                   edge_index_getter[bonding_type])
+            # t0 = time.time()
 
-            elif module_name in ['P', 'P-noOut']:
-                if self.base_unit_getter[previous_module] == "edge":
-                    vi = self._modules['trans_layer{}'.format(i)](mji, edge_index_getter[previous_bonding_type])
+            out_dict["info"] = info
+            if not info["is_transition"]:
+                out_dict["edge_index"] = edge_index_getter[info["bonding_str"]]
+                out_dict["edge_attr"] = expansions[info["combine_str"]]
+            if info["module_str"].split("-")[0] == "D":
+                out_dict["msg_edge_index"] = msg_edge_index_getter[info["bonding_str"]]
 
-                vi, out, regularization = _module(vi, edge_index_getter[bonding_type], this_expansion)
+            # t0 = record_data('assign values', t0)
 
-            else:
-                error_message(module_name, 'module')
+            out_dict = _module(out_dict)
 
-            if module_name[-6:] == '-noOut':
-                # print('this module will not output result: .{}'.format(current_module))
+            # t0 = record_data('main modules', t0)
+
+            if info["is_transition"] or info["module_str"].split("-")[-1] == '-noOut':
                 pass
             else:
-                nh_loss = nh_loss + regularization
-                if separated_last_out[bonding_type] is not None:
+                nh_loss = nh_loss + out_dict["regularization"]
+                if separated_last_out[info["bonding_str"]] is not None:
                     # Calculating non-hierarchical penalty
-                    out2 = out ** 2
-                    last_out2 = separated_last_out[bonding_type] ** 2
+                    out2 = out_dict["out"] ** 2
+                    last_out2 = separated_last_out[info["bonding_str"]] ** 2
                     nh_loss = nh_loss + torch.mean(out2 / (out2 + last_out2 + 1e-7)) * self.nhlambda
-                separated_last_out[bonding_type] = out
-                separated_out_sum[bonding_type] = separated_out_sum[bonding_type] + out
-            previous_module = module_name
-            previous_bonding_type = bonding_type
+                separated_last_out[info["bonding_str"]] = out_dict["out"]
+                separated_out_sum[info["bonding_str"]] = separated_out_sum[info["bonding_str"]] + out_dict["out"]
+
+            # t0 = record_data('nh loss calculation', t0)
 
         # t0 = record_data('main modules', t0)
 
@@ -436,17 +453,18 @@ class PhysDimeNet(nn.Module):
         atom_prop = 0.
         for key in self.bonding_type_keys:
             atom_prop = atom_prop + separated_out_sum[key]
-        #print(atom_prop.shape)
 
         '''
         Post modules: Coulomb or D3 Dispersion layers
         '''
-        for i, (module_name, bonding_type) in enumerate(zip(self.post_modules, self.post_bonding_type)):
-            this_edge_index = edge_index_getter[bonding_type]
-            this_expansion = expansions["{}_{}".format(module_name, bonding_type)]
-            if module_name == 'C':
+        for i, (module_str, bonding_str) in enumerate(zip(self.post_module_str, self.post_bonding_str)):
+            this_edge_index = edge_index_getter[bonding_str]
+            this_expansion = expansions["{}_{}".format(module_str, bonding_str)]
+            if module_str == 'C':
                 if self.coulomb_charge_correct:
-                    coulomb_correction = self._modules["post_module{}".format(i)](atom_prop[:, -1], this_expansion,
+                    Q = data.Q
+                    coulomb_correction = self._modules["post_module{}".format(i)](atom_prop[:, -1],
+                                                                                  this_expansion["pair_dist"],
                                                                                   this_edge_index, q_ref=Q, N=N,
                                                                                   atom_mol_batch=atom_mol_batch)
                 else:
@@ -455,11 +473,11 @@ class PhysDimeNet(nn.Module):
                     coulomb_correction = self._modules["post_module{}".format(i)](atom_prop[:, -1], this_expansion,
                                                                                   this_edge_index)
                 atom_prop[:, 0] = atom_prop[:, 0] + coulomb_correction
-            elif module_name == 'D3':
+            elif module_str == 'D3':
                 d3_correction = self._modules["post_module{}".format(i)](Z, this_expansion, this_edge_index)
                 atom_prop[:, 0] = atom_prop[:, 0] + d3_correction
             else:
-                error_message(module_name, 'module')
+                error_message(module_str, 'module')
 
         # t0 = record_data('post modules', t0)
 
@@ -474,33 +492,35 @@ class PhysDimeNet(nn.Module):
 
         # t0 = record_data('atom prop to molecule', t0)
 
-        Q_pred = 0.
-        D_pred = 0.
-        F_pred = 0.
-        if self.n_output > 1:
-            # the last property is considered as atomic charge prediction
-            Q_pred = mol_pred_properties[:, -1]
-            Q_atom = atom_prop[:, -1]
-            D_atom = Q_atom.view(-1, 1) * R
-            D_pred = scatter(reduce='add', src=D_atom, index=atom_mol_batch, dim=0)
-
         # t0 = record_data('others', t0)
         if self.debug_mode:
             if torch.abs(mol_pred_properties.detach()).max() > 1e4:
                 error_message(torch.abs(mol_pred_properties.detach()).max(), 'Energy prediction')
 
-        if self.action == "E":
-            E_pred = mol_pred_properties[:, 0]
-        elif self.action == "names_and_QD":
-            E_pred = mol_pred_properties[:, :-1]
+        output = {}
+        if self.action in ["E", "names_and_QD"]:
+            mol_prop = mol_pred_properties[:, :-1]
+            assert self.n_output > 1
+            # the last property is considered as atomic charge prediction
+            Q_pred = mol_pred_properties[:, -1]
+            Q_atom = atom_prop[:, -1]
+            atom_prop = atom_prop[:, :-1]
+            D_atom = Q_atom.view(-1, 1) * R
+            D_pred = scatter(reduce='add', src=D_atom, index=atom_mol_batch, dim=0)
+            output["Q_pred"] = Q_pred
+            output["D_pred"] = D_pred
+            if self.requires_atom_prop:
+                output["Q_atom"] = Q_atom
         else:
-            E_pred = mol_pred_properties
+            mol_prop = mol_pred_properties
+        output["mol_prop"] = mol_prop
+        output["nh_loss"] = nh_loss
 
-        output = (E_pred, F_pred, Q_pred, D_pred, nh_loss)
-        if self.requires_embedding:
-            output = (*output, atom_prop, atom_mol_batch, Z)
-        if self.action == 'nmr':
-            return atom_prop, None
-        else:
-            return E_pred, None
+        if self.get_atom_embedding:
+            out_dict['atom_mol_batch'] = atom_mol_batch
+            return out_dict
 
+        if self.requires_atom_prop:
+            output["atom_prop"] = atom_prop
+            output["atom_mol_batch"] = atom_mol_batch
+        return output
