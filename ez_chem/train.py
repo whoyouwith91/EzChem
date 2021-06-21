@@ -29,12 +29,13 @@ def main():
     parser.add_argument('--final_lr', type=float, default=0.0001)
     parser.add_argument('--patience_epochs', type=int, default=2)
     parser.add_argument('--decay_factor', type=float, default=0.9)
-    parser.add_argument('--num_layer', type=int, default=5,
-                        help='number of GNN message passing layers (default: 5).')
-    parser.add_argument('--emb_dim', type=int, default=300,
-                        help='embedding dimensions (default: 300)')
+    parser.add_argument('--num_layer', type=int, default=3,
+                        help='number of GNN message passing layers (default: 3).')
+    parser.add_argument('--emb_dim', type=int, default=64,
+                        help='embedding dimensions (default: 64)')
     parser.add_argument('--fully_connected_layer_sizes', type=int, nargs='+') # number of readout layers
     parser.add_argument('--dataset', type=str, default = 'zinc_standard_agent', help='root directory of dataset for pretraining')
+    parser.add_argument('--explicit_split', action='store_true') # TODO
     parser.add_argument('--normalize', action='store_true')  # on target data
     parser.add_argument('--drop_ratio', type=float, default=0.0) 
     parser.add_argument('--seed', type=int, default=0, help = "Seed for splitting dataset.")
@@ -115,6 +116,27 @@ def main():
     train_loader, val_loader, test_loader, std, num_atom_features, num_bond_features, num_i_2 = loader.train_loader, loader.val_loader, loader.test_loader, loader.std, loader.num_features, loader.num_bond_features, loader.num_i_2
     this_dic['num_atom_features'], this_dic['num_bond_features'], this_dic['num_i_2'], this_dic['std'] = int(num_atom_features), num_bond_features, num_i_2, std
     this_dic['train_size'], this_dic['val_size'], this_dic['test_size'] = len(train_loader.dataset), len(val_loader.dataset), len(test_loader.dataset)
+    if args.model in ['physnet']:
+        if args.dataset in ['qm9/nmr/allAtoms']: # loading physnet params
+            energy_shift = torch.tensor([67.2858])
+            energy_scale = torch.tensor([85.8406])
+        if args.dataset in ['qm9/nmr/carbon']: # loading physnet params
+            energy_shift = torch.tensor([115.9782138561384])
+            energy_scale = torch.tensor([51.569003335315905])
+        if args.dataset in ['qm9/nmr/hydrogen']: # loading physnet params
+            energy_shift = torch.tensor([29.08285732440852])
+            energy_scale = torch.tensor([1.9575037908857158])
+        if args.dataset in ['qm9/u0']:
+            energy_shift = torch.tensor([-4.1164152221029555])
+            energy_scale = torch.tensor([0.9008408776783313])
+        if args.dataset in ['nmr/carbon']:
+            energy_shift = torch.tensor([98.23850877956372])
+            energy_scale = torch.tensor([51.27542605786456])
+        if args.dataset in ['nmr/hydrogen']:
+            energy_shift = torch.tensor([4.707991621093338])
+            energy_scale = torch.tensor([2.6513451307981577])
+        this_dic['energy_shift'] = energy_shift 
+        this_dic['energy_scale'] = energy_scale
 
     # for special cases 
     if args.EFGS:
@@ -127,13 +149,21 @@ def main():
         this_dic['n_feature'] = this_dic['emb_dim']
         this_dic = {**this_dic, **physnet_kwargs}
     model = get_model(this_dic)
-    if this_dic['train_type'] == 'from_scratch': 
+    if this_dic['train_type'] == 'from_scratch' and this_dic['model'] not in ['physnet']: 
         model = init_weights(model, this_dic)
     if this_dic['train_type'] in ['finetuning', 'transfer']:
-        model.from_pretrained(args.preTrainedPath) # load weights for encoders 
+        if args.model in ['physnet']:
+            state_dict = torch.load('/scratch/dz1061/gcn/chemGraph/results/qm9/nmr/allAtoms/physnet/physnet/newModel/Exp_layer3_dim300_lr0.001_bs100_EMA_step_l1_relu_energyShift/seed_31/best_model/model_best.pt')
+            state_dict.update({key:value for key,value in model.state_dict().items() if key in ['scale', 'shift']})
+            model.load_state_dict(state_dict)
+        else:
+            model.from_pretrained(args.preTrainedPath) # load weights for encoders 
     if this_dic['train_type'] == 'transfer': # freeze encoder layers
-        for params in model.gnn.parameters():
-            params.requires_grad = False
+        if args.model in ['physnet']:
+            model.freeze_prev_layers(freeze_extra=True)
+        else:
+            for params in model.gnn.parameters():
+                params.requires_grad = False
 
     # count total # of trainable params
     this_dic['NumParas'] = count_parameters(model)
@@ -162,7 +192,7 @@ def main():
         this_dic['epochs'] = 1
         model_.eval()
     for epoch in range(1, this_dic['epochs']+1):
-        time_tic = time.time() # starting time
+        time_tic = time.time() # ending time 
         if this_dic['scheduler'] == 'const': lr = args.lr
         elif this_dic['scheduler'] in ['NoamLR', 'step']: lr = scheduler.get_lr()[0]
         else:lr = scheduler.optimizer.param_groups[0]['lr'] # decaying on val error
@@ -176,7 +206,7 @@ def main():
         # testing parts
         if this_dic['dataset'] in ['mp', 'mp_drugs', 'xlogp3', 'calcLogP/ALL', 'sol_calc/ALL', \
              'solOct_calc/ALL', 'solWithWater_calc/ALL', 'solOctWithWater_calc/ALL', 'calcLogPWithWater/ALL', \
-                 'qm9/nmr/carbon', 'qm9/nmr/hydrogen', 'qm9/nmr/allAtoms', 'calcSolLogP/ALL']:
+                 'qm9/nmr/carbon', 'qm9/nmr/hydrogen', 'qm9/nmr/allAtoms', 'calcSolLogP/ALL', 'nmr/carbon', 'nmr/hydrogen']:
             train_error = loss # coz train set is too large to be tested every epoch
         else:
             train_error = test_model(this_dic)(model_, train_loader, this_dic) # test on entire dataset
