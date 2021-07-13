@@ -1,6 +1,7 @@
+
 physnet_kwargs = {
         'n_atom_embedding': 95,
-        'n_output': 1,
+        'n_output': 1, # dimension in last layer
         'n_dime_before_residual': 1,
         'n_dime_after_residual': 2,
         'n_output_dense': 3,

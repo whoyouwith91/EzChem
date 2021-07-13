@@ -1,4 +1,4 @@
-import os, sys, random, math, json, glob
+import os, sys, random, math, json, glob, copy
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -14,15 +14,17 @@ import numpy as np
 from torch.optim.lr_scheduler import _LRScheduler
 
 from typing import List, Union
+from kwargs import physnet_kwargs
 
 ################### Configuration setting names ############################
-data_config = ['dataset', 'model', 'normalize', 'style', 'data_path', 'EFGS', 'efgs_lenth', 'num_i_2', 'train_size', 'val_size', 'batch_size']
+data_config = ['dataset', 'model', 'style', 'data_path', 'EFGS', 'efgs_lenth', 'num_i_2', 'train_size', 'val_size', 'batch_size']
 model_config = ['dataset', 'model', 'gnn_type',  'batch_size', 'emb_dim', 'act_fn' , 'weights', 'num_atom_features', 'num_tasks', 'propertyLevel', \
          'num_bond_features', 'pooling', 'NumParas', 'num_layer', 'JK', 'fully_connected_layer_sizes', 'aggregate', 'mol_features', 'tsne', \
-             'residual_connect', 'resLayer', 'interaction_simpler', 'weight_regularizer', 'dropout_regularizer', 'gradCam', 'uncertainty', 'uncertaintyMode', 'drop_ratio']
-train_config = ['running_path', 'seed', 'num_tasks', 'propertyLevel', 'optimizer', 'loss', 'metrics', 'lr', 'lr_style', \
+             'residual_connect', 'resLayer', 'interaction_simpler', 'weight_regularizer', 'dropout_regularizer', 'gradCam', 'uncertainty', \
+                 'uncertaintyMode', 'drop_ratio', 'energy_shift_value', 'energy_scale_value']
+train_config = ['running_path', 'seed', 'num_tasks', 'propertyLevel', 'test_level', 'optimizer', 'loss', 'metrics', 'lr', 'lr_style', \
          'epochs', 'early_stopping', 'train_type', 'taskType', 'train_size', 'val_size', 'test_size', \
-         'preTrainedPath', 'uncertainty', 'uncertaintyMode', 'swag_start']
+         'preTrainedPath', 'uncertainty', 'uncertaintyMode', 'swag_start', 'action', 'mask', 'explicit_split', 'bn']
 #VAE_opts = ['vocab_path', 'vocab_name', 'vocab_size', 'numEncoLayers', 'numDecoLayers', 'numEncoders', 'numDecoders', 'varDimen', 'anneal', 'kl_weight', 'anneal_method', 'anneal_epoch']
 ###############################################################################
 
@@ -165,18 +167,6 @@ def init_weights(model, config):
        model.apply(xavier_uniform)
     return model
 
-def pooling(config):
-    name = config['pooling']
-    if name == 'add':
-       return scatter_add
-    if name == 'mean':
-       return scatter_mean
-    if name == 'max':
-       return scatter_max
-    if name == 'set2set':
-       config['set2setSteps'] = 3
-       return set2set(config['dimension']*2, config['set2setSteps'])
-
 def createResultsFile(this_dic):
     ## create pretty table
     if this_dic['loss'] == 'l2':
@@ -214,6 +204,9 @@ def saveConfig(this_dic, name='config.json'):
     all_ = {'data_config': {key:this_dic[key] for key in data_config if key in this_dic.keys()},
             'model_config':{key:this_dic[key] for key in model_config if key in this_dic.keys()},
             'train_config': {key:this_dic[key] for key in train_config if key in this_dic.keys()}}
+    if this_dic['model'] == 'physnet':
+        phsynet_config = {'physnet_config': physnet_kwargs}
+        all_ = {**all_, **phsynet_config}
     with open(os.path.join(this_dic['running_path'], name), 'w') as f:
         json.dump(all_, f, indent=2)
 

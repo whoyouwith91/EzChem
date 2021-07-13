@@ -7,7 +7,9 @@ from torch_scatter import scatter_add
 from torch_geometric.nn.inits import glorot, zeros
 from helper import *
 from layers import *
+from gnns import *
 from PhysDimeNet import PhysDimeNet
+from torch_geometric.nn.norm import PairNorm
 
 def get_model(config):
     name = config['model']
@@ -60,23 +62,12 @@ class GNN(torch.nn.Module):
         if self.num_layer < 1:
             raise ValueError("Number of GNN layers must be no less than 1.")
         self.linear_x = Linear(self.config['num_atom_features'], self.emb_dim)
+        if self.config['gnn_type'] in ['gineconv', 'pnaconv', 'nnconv']:
+            self.linear_b = Linear(self.config['num_bond_features'], self.emb_dim)
         # define graph conv layers
         self.gnns = torch.nn.ModuleList()
         for _ in range(self.num_layer):
-            if self.gnn_type == "gin":
-                self.gnns.append(GINConv(self.config))
-            elif self.gnn_type == "gcn":
-                self.gnns.append(GCNConv(self.config))
-            elif self.gnn_type == 'nnconv':
-                self.gnns.append(NNConv_(self.config))
-            elif self.gnn_type == "gat":
-                self.gnns.append(GATCon(self.config))
-            elif self.gnn_type == "graphsage":
-                self.gnns.append(GraphSAGEConv(self.config))
-            elif self.gnn_type == 'pnaconv':
-                self.gnns.append(PNAConv_rev(self.config))
-            elif self.gnn_type == 'graphconv':
-                self.gnns.append(GraphConv(self.emb_dim, self.emb_dim))
+            self.gnns.append(get_gnn(self.config).model())
         
         if config['pooling'] == 'edge': # for edge pooling only
             self.pool = PoolingFN(self.config)
@@ -87,7 +78,8 @@ class GNN(torch.nn.Module):
             self.batch_norms = torch.nn.ModuleList()
             for _ in range(self.num_layer):
                 self.batch_norms.append(torch.nn.BatchNorm1d(self.emb_dim))
-    
+
+        #self.pair_norm = PairNorm()
         self.gradients = None # for GradCAM     
 
     ## hook for the gradients of the activations GradCAM
@@ -115,22 +107,24 @@ class GNN(torch.nn.Module):
             raise ValueError("unmatched number of arguments.")
         
         x = self.linear_x(x) # first linear on atoms 
+        if self.config['gnn_type'] in ['gineconv', 'pnaconv', 'nnconv']:
+            edge_attr = self.linear_b(edge_attr.float()) # first linear on bonds 
         h_list = [x]
         for layer in range(self.num_layer):
-            #print(edge_index.shape)
-            #sys.stdout.flush()
             if self.config['residual_connect']: # adding residual connection
-                if layer > self.config['resLayer']: # need to change. currently default to 7 for 12 layers in total
-                    residual = h_list[layer] 
-            if self.gnn_type == 'graphconv':
-                h = self.gnns[layer](h_list[layer], edge_index)
-            else:
+                residual = h_list[layer] 
+            if self.config['gnn_type'] in ['gineconv', 'pnaconv', 'nnconv']:
                 h = self.gnns[layer](h_list[layer], edge_index, edge_attr)
+            else:
+                h = self.gnns[layer](h_list[layer], edge_index)
+            
+            ### in order of Skip >> BN >> ReLU
             if self.config['residual_connect']:
-                if layer > self.config['resLayer']:
-                    h += residual
+                h += residual
             if self.bn:
                 h = self.batch_norms[layer](h)
+            
+            #h = self.pair_norm(h, data.batch)
             if layer == self.num_layer - 1:
                 #remove relu for the last layer
                 h = F.dropout(h, self.drop_ratio, training = self.training)
@@ -187,8 +181,8 @@ class GNN_1(torch.nn.Module):
         self.outLayers = nn.ModuleList()
         if self.uncertainty:
             self.uncertaintyLayers = nn.ModuleList()
-        if self.graph_pooling != 'edge': # except for edge pooling, coded here
-            self.pool = PoolingFN(config)
+        if self.graph_pooling not in ['edge', 'topk', 'sag']: # except for edge pooling, coded here
+            self.pool = PoolingFN(config) # after node embedding updating and pooling 
 
         #For graph-level property predictions
         if self.graph_pooling[:-1][0] == "set2set": # set2set will double dimension
@@ -216,6 +210,8 @@ class GNN_1(torch.nn.Module):
                 fc = nn.Sequential(Linear(L_in, L_out), nn.Dropout(config['drop_ratio']))
                 last_fc = fc
             self.outLayers.append(fc)
+        #if self.propertyLevel == 'atomMol':
+        #    self.outLayers1 = copy.deepcopy(self.outLayers) # another trainable linear layers
 
         if self.uncertaintyMode == 'epistemic': 
             self.drop_mu = NNDropout(weight_regularizer=self.weight_regularizer, dropout_regularizer=self.dropout_regularizer) # working on last layer
@@ -233,20 +229,23 @@ class GNN_1(torch.nn.Module):
             node_representation = self.gnn(x, edge_index, edge_attr) # node updating 
 
         # graph pooling 
-        if self.propertyLevel == 'molecule': 
+        if self.propertyLevel in ['molecule', 'atomMol']: 
             if self.graph_pooling == 'conv':
                 MolEmbed_list = []
                 for p in self.pool:
                     MolEmbed_list.append(p(node_representation, batch))
                 MolEmbed_stack = torch.stack(MolEmbed_list, 1).squeeze()
                 MolEmbed = self.pool(MolEmbed_stack).squeeze()
-            if self.graph_pooling == 'edge':
+            elif self.graph_pooling == 'edge':
                 MolEmbed = global_mean_pool(node_representation, final_batch).squeeze()
-            else:
-                MolEmbed = node_representation 
-                #MolEmbed = self.pool(node_representation, batch)
+            elif self.graph_pooling == 'atomic': # 
+                MolEmbed = node_representation #(-1, emb_dim)
+            else: # normal pooling functions besides conv and edge
+                MolEmbed = self.pool(node_representation, batch)  # atomic read-out (-1, 1)
         if self.propertyLevel == 'atom':
-            MolEmbed = node_representation 
+            MolEmbed = node_representation #(-1, emb_dim)
+        #elif self.propertyLevel in ['atom', 'atomMol']:
+        #    MolEmbed = node_representation  # atomic read-out
         if self.features: # concatenating molecular features
             #print(data.features.shape, MolEmbed.shape)
             MolEmbed = torch.cat((MolEmbed, data.features.view(MolEmbed.shape[0], -1)), -1)
@@ -255,17 +254,23 @@ class GNN_1(torch.nn.Module):
 
         # read-out layers
         if not self.uncertainty:
-            for layer in self.outLayers:
-                MolEmbed = layer(MolEmbed)
+            for layer in self.outLayers: # 
+                MolEmbed = layer(MolEmbed) 
+            #if self.dataset == 'solNMR' and self.propertyLevel == 'atomMol':
+            #    for layer in self.outLayers1:
+            #        node_representation = layer(node_representation)
+
             if self.num_tasks > 1:
-                return MolEmbed, None
-            if self.propertyLevel == 'atom':
+                if self.dataset == 'solNMR':
+                    assert MolEmbed.size(-1) == self.num_tasks
+                    return MolEmbed[:,0].view(-1), self.pool(MolEmbed[:,1], batch).view(-1)
+                else:
+                    return MolEmbed, None
+            elif self.propertyLevel == 'atom' and self.dataset != 'solNMR':
                 return MolEmbed.view(-1,1), None
-            if self.graph_pooling == 'edge':
-                return MolEmbed.view(-1), None
             else:
-                return self.pool(MolEmbed, batch).view(-1), None
-                #return MolEmbed.view(-1), None
+                return MolEmbed.view(-1), MolEmbed.view(-1)
+            
         # for uncertainty analysis
         else:
             for layer, drop in zip(self.outLayers[1:-1], self.uncertaintyLayers):

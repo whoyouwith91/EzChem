@@ -498,7 +498,7 @@ class PhysDimeNet(nn.Module):
                 error_message(torch.abs(mol_pred_properties.detach()).max(), 'Energy prediction')
 
         output = {}
-        if self.action in ["E", "names_and_QD"]:
+        if self.action in ["E", "names_and_QD", "atomMol"]:
             mol_prop = mol_pred_properties[:, :-1]
             assert self.n_output > 1
             # the last property is considered as atomic charge prediction

@@ -1,5 +1,6 @@
-import argparse, time, os 
+import argparse, time, os, warnings
 import torch
+from args import *
 from helper import *
 from data import *
 from trainer import *
@@ -9,73 +10,8 @@ from Optimizers import EmaAmsGrad
 from kwargs import *
 
 def main():
-    # Training settings
-    parser = argparse.ArgumentParser(description='PyTorch implementation of graph neural networks')
-    parser.add_argument('--allDataPath', type=str, default='/scratch/dz1061/gcn/chemGraph/data')
-    parser.add_argument('--running_path', type=str,
-                        help='path to save model', default='/scratch/dz1061/gcn/chemGraph/results')    
-    parser.add_argument('--device', type=int, default=0,
-                        help='which gpu to use if any (default: 0)')
-    parser.add_argument('--batch_size', type=int, default=256,
-                        help='input batch size for training (default: 256)')
-    parser.add_argument('--epochs', type=int, default=100,
-                        help='number of epochs to train (default: 100)')
-    parser.add_argument('--lr', type=float, default=0.001,
-                        help='learning rate (default: 0.001)')
-    parser.add_argument('--scheduler', type=str, default='const')
-    parser.add_argument('--warmup_epochs', type=int, default=2)
-    parser.add_argument('--init_lr', type=float, default=0.0001)
-    parser.add_argument('--max_lr', type=float, default=0.001)
-    parser.add_argument('--final_lr', type=float, default=0.0001)
-    parser.add_argument('--patience_epochs', type=int, default=2)
-    parser.add_argument('--decay_factor', type=float, default=0.9)
-    parser.add_argument('--num_layer', type=int, default=3,
-                        help='number of GNN message passing layers (default: 3).')
-    parser.add_argument('--emb_dim', type=int, default=64,
-                        help='embedding dimensions (default: 64)')
-    parser.add_argument('--fully_connected_layer_sizes', type=int, nargs='+') # number of readout layers
-    parser.add_argument('--dataset', type=str, default = 'zinc_standard_agent', help='root directory of dataset for pretraining')
-    parser.add_argument('--explicit_split', action='store_true') # TODO
-    parser.add_argument('--normalize', action='store_true')  # on target data
-    parser.add_argument('--drop_ratio', type=float, default=0.0) 
-    parser.add_argument('--seed', type=int, default=0, help = "Seed for splitting dataset.")
-    parser.add_argument('--num_workers', type=int, default = 8, help='number of workers for dataset loading')
-    parser.add_argument('--model', type=str, default="1-GNN")
-    parser.add_argument('--EFGS', action='store_true')
-    parser.add_argument('--mol_features', action='store_true')
-    parser.add_argument('--residual_connect', action='store_true')
-    parser.add_argument('--resLayer', type=int, default=-1)
-    parser.add_argument('--interaction_simpler', action='store_true')
-    parser.add_argument('--pooling', type=str, default='sum')
-    parser.add_argument('--aggregate', type=str, default='add')
-    parser.add_argument('--gnn_type', type=str, default="gin")
-    parser.add_argument('--bn', action='store_true')
-    parser.add_argument('--JK', type=str, default="last",
-                        help='how the node features are combined across layers. last, sum, max or concat')
-    parser.add_argument('--action', type=str) # physnet
-    parser.add_argument('--mask', action='store_true')
-    parser.add_argument('--train_type', type=str, default='from_scratch', choices=['from_scratch', 'transfer', 'hpsearch', 'finetuning'])
-    parser.add_argument('--preTrainedPath', type=str)
-    parser.add_argument('--OnlyPrediction', action='store_true')
-    parser.add_argument('--loss', type=str, choices=['l1', 'l2', 'smooth_l1', 'dropout', 'vae', 'unsuper', 'maskedL2'])
-    parser.add_argument('--metrics', type=str, choices=['l1', 'l2'])
-    parser.add_argument('--weights', type=str, choices=['he_norm', 'xavier_norm', 'he_uni', 'xavier_uni'], default='he_uni')
-    parser.add_argument('--act_fn', type=str, default='relu')
-    parser.add_argument('--optimizer',  type=str, choices=['adam', 'sgd', 'swa', 'EMA'])
-    parser.add_argument('--style', type=str, choices=['base', 'CV', 'preTraining'])  # if running CV
-    parser.add_argument('--early_stopping', action='store_true')
-    parser.add_argument('--experiment', type=str)  # when doing experimenting, name it. 
-    parser.add_argument('--num_tasks', type=int, default=1)
-    parser.add_argument('--propertyLevel', type=str, default='molecule')
-    parser.add_argument('--gradCam', action='store_true')
-    parser.add_argument('--tsne', action='store_true')
-    parser.add_argument('--uncertainty',  action='store_true')
-    parser.add_argument('--uncertaintyMode',  type=str)
-    parser.add_argument('--weight_regularizer', type=float, default=1e-6)
-    parser.add_argument('--dropout_regularizer', type=float, default=1e-5)
-    parser.add_argument('--swag_start', type=int)
-    args = parser.parse_args()
-
+    warnings.filterwarnings("ignore")
+    args = get_parser()
     set_seed(args.seed)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -101,6 +37,9 @@ def main():
     if args.dataset == 'calcSolLogP/ALL':
        this_dic['taskType'] = 'multi'
        args.num_tasks = 3
+    if args.dataset == 'solNMR' and args.propertyLevel == 'atomMol':
+        args.num_tasks = 2
+        this_dic['taskType'] = 'multi'
     else:
        this_dic['taskType'] = 'single'
 
@@ -113,8 +52,8 @@ def main():
 
     # load processed data 
     loader = get_data_loader(this_dic)
-    train_loader, val_loader, test_loader, std, num_atom_features, num_bond_features, num_i_2 = loader.train_loader, loader.val_loader, loader.test_loader, loader.std, loader.num_features, loader.num_bond_features, loader.num_i_2
-    this_dic['num_atom_features'], this_dic['num_bond_features'], this_dic['num_i_2'], this_dic['std'] = int(num_atom_features), num_bond_features, num_i_2, std
+    train_loader, val_loader, test_loader, num_atom_features, num_bond_features, num_i_2 = loader.train_loader, loader.val_loader, loader.test_loader, loader.num_features, loader.num_bond_features, loader.num_i_2
+    this_dic['num_atom_features'], this_dic['num_bond_features'], this_dic['num_i_2'] = int(num_atom_features), num_bond_features, num_i_2
     this_dic['train_size'], this_dic['val_size'], this_dic['test_size'] = len(train_loader.dataset), len(val_loader.dataset), len(test_loader.dataset)
     if args.model in ['physnet']:
         if args.dataset in ['qm9/nmr/allAtoms']: # loading physnet params
@@ -135,29 +74,36 @@ def main():
         if args.dataset in ['nmr/hydrogen']:
             energy_shift = torch.tensor([4.707991621093338])
             energy_scale = torch.tensor([2.6513451307981577])
-        this_dic['energy_shift'] = energy_shift 
-        this_dic['energy_scale'] = energy_scale
+        if args.dataset in ['solNMR']:
+            if args.test_level == 'molecule':
+                energy_shift = torch.tensor([-7.3204])
+                energy_scale = torch.tensor([4.7854])
+            if args.test_level == 'atom':
+                energy_shift = torch.tensor([75.4205])
+                energy_scale = torch.tensor([151.0311])
+
+        this_dic['energy_shift'], this_dic['energy_shift_value'] = energy_shift, energy_shift.item()
+        this_dic['energy_scale'], this_dic['energy_scale_value'] = energy_scale, energy_scale.item()
 
     # for special cases 
     if args.EFGS:
         this_dic['efgs_lenth'] = len(vocab)
-    if args.residual_connect:
-        this_dic['resLayer'] = args.resLayer
     
     # loading model
     if args.model in ['physnet']: # loading physnet params
         this_dic['n_feature'] = this_dic['emb_dim']
         this_dic = {**this_dic, **physnet_kwargs}
     model = get_model(this_dic)
+    # model weights initializations
     if this_dic['train_type'] == 'from_scratch' and this_dic['model'] not in ['physnet']: 
         model = init_weights(model, this_dic)
     if this_dic['train_type'] in ['finetuning', 'transfer']:
         if args.model in ['physnet']:
-            state_dict = torch.load('/scratch/dz1061/gcn/chemGraph/results/qm9/nmr/allAtoms/physnet/physnet/newModel/Exp_layer3_dim300_lr0.001_bs100_EMA_step_l1_relu_energyShift/seed_31/best_model/model_best.pt')
+            state_dict = torch.load(os.path.join(args.preTrainedPath, 'best_model', 'model_best.pt'))
             state_dict.update({key:value for key,value in model.state_dict().items() if key in ['scale', 'shift']})
             model.load_state_dict(state_dict)
         else:
-            model.from_pretrained(args.preTrainedPath) # load weights for encoders 
+            model.from_pretrained(os.path.join(args.preTrainedPath, 'best_model', 'model_best.pt')) # load weights for encoders 
     if this_dic['train_type'] == 'transfer': # freeze encoder layers
         if args.model in ['physnet']:
             model.freeze_prev_layers(freeze_extra=True)
@@ -222,6 +168,9 @@ def main():
 
         # write out models and results
         if not this_dic['uncertainty']:
+            #assert torch.is_tensor(train_error)
+            #assert torch.is_tensor(val_error)
+            #assert torch.is_tensor(test_error)
             contents = [epoch, round(time_toc-time_tic, 2), round(lr,7), round(train_error,3),  \
                 round(val_error,3), round(test_error,3), round(param_norm(model_),2), round(grad_norm(model_),2)]
             results.add_row(contents) # updating pretty table 
@@ -230,7 +179,7 @@ def main():
                 best_val_error = saveModel(this_dic, epoch, shadow_model, best_val_error, val_error)
             else:
                 best_val_error = saveModel(this_dic, epoch, model_, best_val_error, val_error) # save model if validation error hits new lower 
-    torch.save(model.state_dict(), os.path.join(this_dic['running_path'], 'trained_model', 'model_last.pt'))
+    torch.save(model_.state_dict(), os.path.join(this_dic['running_path'], 'trained_model', 'model_last.pt'))
 
 if __name__ == "__main__":
     #cycle_index(10,2)

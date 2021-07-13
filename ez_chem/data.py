@@ -1,5 +1,7 @@
 from dataProcess import *
+from k_gnn import DataLoader
 from DummyIMDataset import DummyIMDataset
+from DataPrepareUtils import my_pre_transform
 from utils_functions import collate_fn # sPhysnet
 import torch
 
@@ -27,8 +29,8 @@ class get_data_loader():
 
       if self.name == None:
          raise ValueError('Please specify one dataset you want to work on!')
-      if self.model in ['1-GNN', '1-2-GNN', '1-2-GNN_dropout', '1-2-GNN_swag', '1-2-efgs-GNN', '1-efgs-GNN', '1-interaction-GNN', 'physnet']:
-         self.train_loader, self.val_loader, self.test_loader, self.std, self.num_features, self.num_bond_features, self.num_i_2 = self.graph_loader()
+      self.train_loader, self.val_loader, self.test_loader, self.num_features, self.num_bond_features, self.num_i_2 = self.graph_loader()
+      
       if self.model in ['VAE', 'TransformerUnsuper']:
          self.tokenizer = MolTokenizer(vocab_file=os.path.join(self.config['vocab_path'], self.config['vocab_name']))
     
@@ -88,8 +90,8 @@ class get_data_loader():
 
       elif self.config['model'] in ['physnet']:
          #if self.config['dataset'] == 'qm9':
-         #data = QM9(root=self.config['data_path'], pre_transform=my_pre_transform)
-         dataset = DummyIMDataset(root=self.config['data_path'], dataset_name='processed.pt')
+         dataset = physnet(root=self.config['data_path'], pre_transform=my_pre_transform)
+         #dataset = DummyIMDataset(root=self.config['data_path'], dataset_name='processed.pt')
          num_i_2 = None
       else: # 1-GNN
          if self.config['dataset'] == 'calcSolLogP/ALL':
@@ -99,9 +101,16 @@ class get_data_loader():
          elif self.config['mol_features']:
             dataset = knnGraph_mol(root=self.config['data_path'])
             num_i_2 = None
+         elif self.config['dataset'] == 'solNMR':
+            dataset = knnGraph_solNMR(root=self.config['data_path'])
+            num_i_2 = None
+         elif self.config['dataset'] == 'solEFGs':
+            dataset = knnGraph_solEFGs(root=self.config['data_path'])
+            num_i_2 = None
          else:
             dataset = knnGraph(root=self.config['data_path'])
             num_i_2 = None
+      
       num_features = dataset.num_features
       if self.config['model'] not in ['physnet']:
          num_bond_features = dataset[0]['edge_attr'].shape[1]
@@ -109,15 +118,9 @@ class get_data_loader():
          num_bond_features = 0
           
       my_split_ratio = [self.train_size, self.val_size]  #my dataseet
-      if self.config['normalize']:
-         mean = dataset.data.y[:my_split_ratio[0]+my_split_ratio[1]].mean(dim=0)
-         std = dataset.data.y[:my_split_ratio[0]+my_split_ratio[1]].std(dim=0)
-         dataset.data.y = (dataset.data.y - mean) / std
-      else:
-         std = torch.FloatTensor([1.0])  # for test function: not converting back by multiplying std
-         test_dataset = dataset[my_split_ratio[0]+my_split_ratio[1]:]
-         rest_dataset = dataset[:my_split_ratio[0]+my_split_ratio[1]]
-      #rest_dataset = rest_dataset.shuffle()  ## can be used on CV
+      
+      test_dataset = dataset[my_split_ratio[0]+my_split_ratio[1]:]
+      rest_dataset = dataset[:my_split_ratio[0]+my_split_ratio[1]]
       train_dataset, val_dataset = rest_dataset[:my_split_ratio[0]], rest_dataset[my_split_ratio[0]:]
 
       if self.config['model'] in ['physnet']:
@@ -134,7 +137,7 @@ class get_data_loader():
          val_loader = DataLoader(val_dataset, batch_size=self.config['batch_size'], num_workers=0)
          train_loader = DataLoader(train_dataset, batch_size=self.config['batch_size'], num_workers=0, shuffle=True)
       #part_train_loader = DataLoader(train_dataset[:10000], batch_size=self.config['batch_size'], num_workers=0)
-      return train_loader, val_loader, test_loader, std, num_features, num_bond_features, num_i_2
+      return train_loader, val_loader, test_loader, num_features, num_bond_features, num_i_2
 
    def vaeLoader(self):
       train_data, valid_data, test_data = data.TabularDataset.splits(

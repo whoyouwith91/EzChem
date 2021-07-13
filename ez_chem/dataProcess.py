@@ -2,16 +2,13 @@ import os, pickle
 from typing import List, Tuple, Union
 import torch
 import torch.nn.functional as F
-from torch_geometric.data import (InMemoryDataset, download_url, extract_tar,
-                                  Data)
+from torch_geometric.data import (InMemoryDataset,Data)
 from torch_geometric.data import Batch
-from k_gnn import TwoMalkin, ConnectedThreeMalkin
-from k_gnn import DataLoader
+from k_gnn import TwoMalkin
 from featurization import *
 
 from three_level_frag import cleavage, AtomListToSubMol, standize, mol2frag, WordNotFoundError, counter
 from ifg import identify_functional_groups
-import numpy as np
 
 #vocab = pickle.load(open('/scratch/dz1061/gcn/datasets/EFGS/vocab/ours/ours_vocab.pt', 'rb'))
 
@@ -96,6 +93,99 @@ class knnGraph(InMemoryDataset):
                 y=d['y'],
                 smiles=d['smiles'],
                 ids=d['id']
+                ) for d in raw_data_list
+        ]
+
+        if self.pre_filter is not None:
+            data_list = [data for data in data_list if self.pre_filter(data)]
+
+        if self.pre_transform is not None:
+            data_list = [self.pre_transform(data) for data in data_list]
+
+        data, slices = self.collate(data_list)
+        torch.save((data, slices), self.processed_paths[0])
+#------------------Naive-------------------------------------
+
+#------------------solEFGs-------------------------------------
+class knnGraph_solEFGs(InMemoryDataset):
+    def __init__(self,
+                 root,
+                 transform=None,
+                 pre_transform=None,
+                 pre_filter=None):
+        super(knnGraph_solEFGs, self).__init__(root, transform, pre_transform, pre_filter)
+        self.type = type
+        self.data, self.slices = torch.load(self.processed_paths[0])
+
+    @property
+    def raw_file_names(self):
+        return 'temp.pt'
+
+    @property
+    def processed_file_names(self):
+        return 'processed.pt'
+    
+    def download(self):
+        pass
+
+    def process(self):
+        raw_data_list = torch.load(self.raw_paths[0])
+        data_list = [
+            Data(
+                x=d['x'],
+                edge_index=d['edge_index'],
+                edge_attr=d['edge_attr'],
+                y=d['y'],
+                atom_y=d['atom_efgs'],
+                smiles=d['smiles'],
+                ids=d['id']
+                ) for d in raw_data_list
+        ]
+
+        if self.pre_filter is not None:
+            data_list = [data for data in data_list if self.pre_filter(data)]
+
+        if self.pre_transform is not None:
+            data_list = [self.pre_transform(data) for data in data_list]
+
+        data, slices = self.collate(data_list)
+        torch.save((data, slices), self.processed_paths[0])
+#------------------SolEFGs-------------------------------------
+
+#------------------solNMR-------------------------------------
+class knnGraph_solNMR(InMemoryDataset):
+    def __init__(self,
+                 root,
+                 transform=None,
+                 pre_transform=None,
+                 pre_filter=None):
+        super(knnGraph_solNMR, self).__init__(root, transform, pre_transform, pre_filter)
+        self.type = type
+        self.data, self.slices = torch.load(self.processed_paths[0])
+
+    @property
+    def raw_file_names(self):
+        return 'temp.pt'
+
+    @property
+    def processed_file_names(self):
+        return 'processed.pt'
+    
+    def download(self):
+        pass
+
+    def process(self):
+        raw_data_list = torch.load(self.raw_paths[0])
+        data_list = [
+            Data(
+                x=d['x'],
+                edge_index=d['edge_index'],
+                edge_attr=d['edge_attr'],
+                atom_y=d['atom_y'],
+                mol_y=d['mol_y'],
+                N=d['N']
+                #smiles=d['smiles'],
+                #ids=d['id']
                 ) for d in raw_data_list
         ]
 
@@ -201,8 +291,8 @@ class knnGraph_nmr(InMemoryDataset):
         torch.save((data, slices), self.processed_paths[0])
 #------------------NMR--------------------------------------
 
-#-----------------------PhysNet-NMR-------------------------------
-class physnet_nmr(InMemoryDataset):
+#-----------------------PhysNet-------------------------------
+class physnet(InMemoryDataset):
     #raw_url = ('https://deepchemdata.s3-us-west-1.amazonaws.com/datasets/'
     #           'molnet_publish/qm9.zip')
     #raw_url2 = 'https://ndownloader.figshare.com/files/3195404'
@@ -210,37 +300,42 @@ class physnet_nmr(InMemoryDataset):
 
     def __init__(self, root, transform=None, pre_transform=None,
                  pre_filter=None):
-        super(physnet_nmr, self).__init__(root, transform, pre_transform, pre_filter)
+        super(physnet, self).__init__(root, transform, pre_transform, pre_filter)
         self.data, self.slices = torch.load(self.processed_paths[0])
 
     @property
     def raw_file_names(self):
-        return ['nmr.sdf', 'nmrshiftdb.pickle']
+        return 'temp.pt'
 
     @property
     def processed_file_names(self):
-        return 'data_nmr.pt'
+        return 'processed.pt'
 
     def process(self):
 
-        with open(self.raw_paths[1], 'rb') as f: # modify this function TODO
-            data = pickle.load(f)
-        all_ = pd.concat([data['train_df'], data['test_df']])
+        #with open(self.raw_paths[1], 'rb') as f: # modify this function TODO
+        #    data = pickle.load(f)
+        #all_ = pd.concat([data['train_df'], data['test_df']])
         #print(all_['molecule_id'].tolist())
         
-        suppl = Chem.SDMolSupplier(self.raw_paths[0], removeHs=False,
-                                   sanitize=False)
+        #suppl = Chem.SDMolSupplier(self.raw_paths[0], removeHs=False,
+        #                           sanitize=False)
 
         data_list = []
-        for i, mol in enumerate(tqdm(suppl)):
-            name = mol.GetProp('_Name')
+        raw_data_list = torch.load(self.raw_paths[0])
+        for _, value in raw_data_list.items():
+            mol = value[0][0]
+            #name = mol.GetProp('_Name')
             #print(name)
             N = mol.GetNumAtoms()
             #print(N)
             N_ = torch.tensor(N).view(-1)
 
-            pos = suppl.GetItemText(i).split('\n')[4:4 + N]
-            pos = [[float(x) for x in line.split()[:3]] for line in pos]
+            #pos = mol.GetItemText(i).split('\n')[4:4 + N]
+            pos = []
+            for i in range(N):
+                position = mol.GetConformer().GetAtomPosition(i) 
+                pos.append([position.x, position.y, position.z])
             pos = torch.tensor(pos, dtype=torch.float)
 
             atomic_number = []
@@ -248,39 +343,24 @@ class physnet_nmr(InMemoryDataset):
                 atomic_number.append(atom.GetAtomicNum())
             z = torch.tensor(atomic_number, dtype=torch.long)
             
-            #print('here')
-            if int(name) in all_['molecule_id'].tolist():
-                #print('here')
-                spectra_numbers = all_[all_['molecule_id'] == int(name)]['value'].shape[0]
-                #print(spectra_numbers)
-                if spectra_numbers > 1:
-                    print('multiple spectra found for %s!' % name)
-                for i in range(spectra_numbers):
-                    mask = np.zeros((N, 1), dtype=np.float32)
-                    vals = np.zeros((N, 1), dtype=np.float32)
-                    #print(i)
-                    tar = all_[all_['molecule_id'] == int(name)]['value'].values[i][0]
-                    #print(tar)
-                    for k, v in tar.items():
-                        mask[int(k), 0] = 1.0
-                        vals[int(k), 0] = v
-                    y = torch.FloatTensor(vals).flatten()
-                    #print(y)
-                    data = Data(R=pos, Z=z, y=y, mask=mask, N=N_, idx=int(name))
-                    #print(data)
+            #mask = np.zeros((N, 1), dtype=np.float32)
+            #vals = np.zeros((N, 1), dtype=np.float32)
+            #for k,v in enumerate(value[0][2]):
+            #    mask[int(k), 0] = 1.0
+            #    vals[int(k), 0] = v
+            mol_y = torch.FloatTensor([value[0][1]]).flatten()
+            atom_y = torch.FloatTensor(value[0][2]).flatten()
+            data = Data(R=pos, Z=z, atom_y=atom_y, mol_y=mol_y, N=N_)
 
-                    if self.pre_filter is not None and not self.pre_filter(data):
-                        continue
-                    data_edge = self.pre_transform(data, edge_version="cutoff", do_sort_edge=True, cal_efg=False,
+            if self.pre_filter is not None and not self.pre_filter(data):
+                continue
+            data_edge = self.pre_transform(data, edge_version="cutoff", do_sort_edge=True, cal_efg=False,
                                          cutoff=10.0, boundary_factor=100., use_center=True, mol=None, cal_3body_term=False,
                                          bond_atom_sep=False, record_long_range=True)
-                    #print(data_edge[0].keys())
-                    data_list.append(data_edge)
-                #if i > 10:
-            #    break
+            data_list.append(data_edge)
 
         torch.save(self.collate(data_list), self.processed_paths[0])
-#-----------------------PhysNet-NMR-------------------------------
+#-----------------------PhysNet-------------------------------
 
 #-----------------------QM9-NMR--------------------------------------
 class QM9_nmr(InMemoryDataset):
