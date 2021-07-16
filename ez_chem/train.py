@@ -40,6 +40,15 @@ def main():
     if args.dataset == 'solNMR' and args.propertyLevel == 'atomMol':
         args.num_tasks = 2
         this_dic['taskType'] = 'multi'
+    if args.dataset == 'solEFGs':
+        if args.propertyLevel == 'atomMol':
+            args.num_tasks = 883
+            this_dic['taskType'] = 'multi'
+            this_dic['atom_loss'] = 'class'
+            this_dic['mol_loss'] = 'l1'
+        if args.propertyLevel == 'atom':
+            args.num_tasks = 882
+            this_dic['taskType'] = 'multi'
     else:
        this_dic['taskType'] = 'single'
 
@@ -55,7 +64,7 @@ def main():
     train_loader, val_loader, test_loader, num_atom_features, num_bond_features, num_i_2 = loader.train_loader, loader.val_loader, loader.test_loader, loader.num_features, loader.num_bond_features, loader.num_i_2
     this_dic['num_atom_features'], this_dic['num_bond_features'], this_dic['num_i_2'] = int(num_atom_features), num_bond_features, num_i_2
     this_dic['train_size'], this_dic['val_size'], this_dic['test_size'] = len(train_loader.dataset), len(val_loader.dataset), len(test_loader.dataset)
-    if args.model in ['physnet']:
+    if args.model in ['physnet'] or args.dataset == 'solNMR':
         if args.dataset in ['qm9/nmr/allAtoms']: # loading physnet params
             energy_shift = torch.tensor([67.2858])
             energy_scale = torch.tensor([85.8406])
@@ -93,6 +102,9 @@ def main():
     if args.model in ['physnet']: # loading physnet params
         this_dic['n_feature'] = this_dic['emb_dim']
         this_dic = {**this_dic, **physnet_kwargs}
+    if this_dic['gnn_type'] == 'pnaconv':
+        this_dic['deg'] = getDegreeforPNA(train_loader)
+
     model = get_model(this_dic)
     # model weights initializations
     if this_dic['train_type'] == 'from_scratch' and this_dic['model'] not in ['physnet']: 
@@ -152,7 +164,7 @@ def main():
         # testing parts
         if this_dic['dataset'] in ['mp', 'mp_drugs', 'xlogp3', 'calcLogP/ALL', 'sol_calc/ALL', \
              'solOct_calc/ALL', 'solWithWater_calc/ALL', 'solOctWithWater_calc/ALL', 'calcLogPWithWater/ALL', \
-                 'qm9/nmr/carbon', 'qm9/nmr/hydrogen', 'qm9/nmr/allAtoms', 'calcSolLogP/ALL', 'nmr/carbon', 'nmr/hydrogen']:
+                 'qm9/nmr/carbon', 'qm9/nmr/hydrogen', 'qm9/nmr/allAtoms', 'calcSolLogP/ALL', 'nmr/carbon', 'nmr/hydrogen', 'solEFGs']:
             train_error = loss # coz train set is too large to be tested every epoch
         else:
             train_error = test_model(this_dic)(model_, train_loader, this_dic) # test on entire dataset
@@ -171,7 +183,11 @@ def main():
             #assert torch.is_tensor(train_error)
             #assert torch.is_tensor(val_error)
             #assert torch.is_tensor(test_error)
-            contents = [epoch, round(time_toc-time_tic, 2), round(lr,7), round(train_error,3),  \
+            if this_dic['dataset'] == 'solEFGs' and this_dic['propertyLevel'] == 'atom':
+                contents = [epoch, round(time_toc-time_tic, 2), round(lr,7), round(train_error[0],3), round(train_error[1],3),  \
+                round(val_error,3), round(test_error,3), round(param_norm(model_),2), round(grad_norm(model_),2)]
+            else:
+                contents = [epoch, round(time_toc-time_tic, 2), round(lr,7), round(train_error,3),  \
                 round(val_error,3), round(test_error,3), round(param_norm(model_),2), round(grad_norm(model_),2)]
             results.add_row(contents) # updating pretty table 
             saveToResultsFile(results, this_dic, name='data.txt') # save instant data to directory

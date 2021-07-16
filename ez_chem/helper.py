@@ -12,6 +12,7 @@ from prettytable import PrettyTable
 import pandas as pd
 import numpy as np
 from torch.optim.lr_scheduler import _LRScheduler
+import sklearn.metrics as metrics
 
 from typing import List, Union
 from kwargs import physnet_kwargs
@@ -117,6 +118,8 @@ def get_loss_fn(name):
        return vae_loss
     if name == 'unsuper':
        return unsuper_loss
+    if name =='class':
+        return F.cross_entropy
 
 def get_metrics_fn(name):
     if name == 'l1':
@@ -125,6 +128,8 @@ def get_metrics_fn(name):
         return F.mse_loss
     if name == 'smooth_l1':
         return F.smooth_l1_loss
+    if name == 'class':
+        return metrics.accuracy_score
 
 def activation_func(config):
     name = config['act_fn']
@@ -171,13 +176,21 @@ def createResultsFile(this_dic):
     ## create pretty table
     if this_dic['loss'] == 'l2':
         train_header = 'RMSE'
-    else:
+    if this_dic['loss'] == 'l1':
         train_header = 'MAE'
+    if this_dic['loss'] == 'class':
+        train_header1 = 'Loss'
+        train_header2 = 'Accuracy'
     if this_dic['metrics'] == 'l2':
         test_header = 'RMSE'
-    else:
+    if this_dic['metrics'] == 'l1':
         test_header = 'MAE'
-    header = ['Epoch', 'Time', 'LR', 'Train {}'.format(train_header), 'Valid {}'.format(test_header), 'Test {}'.format(test_header), 'PNorm', 'GNorm']
+    if this_dic['metrics'] == 'class':
+        test_header = 'Accuracy'
+    if this_dic['loss'] == 'class':
+        header = ['Epoch', 'Time', 'LR', 'Train {}'.format(train_header1), 'Train {}'.format(train_header2), 'Valid {}'.format(test_header), 'Test {}'.format(test_header), 'PNorm', 'GNorm']
+    else:
+        header = ['Epoch', 'Time', 'LR', 'Train {}'.format(train_header), 'Valid {}'.format(test_header), 'Test {}'.format(test_header), 'PNorm', 'GNorm']
     x = PrettyTable(header)
     return x 
 
@@ -368,3 +381,19 @@ class NoamLR(_LRScheduler):
                 self.lr[i] = self.final_lr[i]
 
             self.optimizer.param_groups[i]['lr'] = self.lr[i]
+
+def semi_orthogonal_matrix(N, M, seed=None):
+    if N > M:  # number of rows is larger than number of columns
+        square_matrix = square_orthogonal_matrix(dim=N, seed=seed)
+    else:  # number of columns is larger than number of rows
+        square_matrix = square_orthogonal_matrix(dim=M, seed=seed)
+    return square_matrix[:N, :M]
+
+def getDegreeforPNA(loader):
+    from torch_geometric.utils import degree
+    
+    deg = torch.zeros(6, dtype=torch.long)
+    for data in loader:
+        d = degree(data.edge_index[1], num_nodes=data.num_nodes, dtype=torch.long)
+        deg += torch.bincount(d, minlength=deg.numel())
+    return deg

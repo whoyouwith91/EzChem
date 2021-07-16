@@ -192,3 +192,50 @@ def PoolingFN(config):
         raise ValueError("Invalid graph pooling type.")
 
     return pool
+
+class ResidualLayer(nn.Module):
+    """
+    The residual layer defined in PhysNet
+    """
+    def __init__(self, module, dim, activation, drop_ratio=0., batch_norm=False):
+        super().__init__()
+        self.batch_norm = batch_norm
+        self.drop_ratio = drop_ratio
+        self.activation = activation
+        self.module = module
+
+        self.lin1 = nn.Linear(dim, dim)
+        self.lin1.weight.data = semi_orthogonal_glorot_weights(F, F)
+        self.lin1.bias.data.zero_()
+        if self.batch_norm:
+            self.bn1 = nn.BatchNorm1d(dim, momentum=1.)
+
+        self.lin2 = nn.Linear(dim, dim)
+        self.lin2.weight.data = semi_orthogonal_glorot_weights(dim, dim)
+        self.lin2.bias.data.zero_()
+        if self.batch_norm:
+            self.bn2 = nn.BatchNorm1d(dim, momentum=1.)
+
+    def forward(self, module_type, x,  edge_index=None, edge_attr=None):
+        ### in order of Skip >> BN >> ReLU
+        if module_type == 'linear': 
+            x_res = self.module(x)
+        elif module_type in ['gineconv', 'pnaconv', 'nnconv']:
+            gnn_x = self.module(x, edge_index, edge_attr)
+            x_res = gnn_x
+        else:  # conv without using edge attributes
+            gnn_x = self.module(x, edge_index)
+            x_res = gnn_x
+        
+        if self.batch_norm:
+            x = self.bn1(x)
+        x = self.activation(x)
+        x = self.lin1(x)
+        x = F.dropout(x, self.drop_ratio, training = self.training)  
+        if self.batch_norm:
+            x = self.bn2(x)
+        x = self.activation(x)
+        
+        x = self.lin2(x)
+        x = F.dropout(x, self.drop_ratio, training = self.training)
+        return x + x_res

@@ -10,6 +10,7 @@ from rdkit import Chem
 from rdkit.Chem import Descriptors
 from rdkit.ML.Descriptors import MoleculeDescriptors
 from three_level_frag import cleavage, AtomListToSubMol, standize, mol2frag, WordNotFoundError, counter
+from torch_geometric.utils.convert import to_networkx, from_networkx
 
 def parse_input_arguments():
     parser = argparse.ArgumentParser(description='Physicochemical prediction')
@@ -135,12 +136,24 @@ def main():
                     molgraphs['mol_y'] = torch.FloatTensor([value[0][1]])
                     molgraphs['atom_y'] = torch.FloatTensor(value[0][2])
                     molgraphs['N'] = torch.FloatTensor([mol.GetNumAtoms()])
+                    
+                    atomic_number = []
+                    for atom in mol.GetAtoms():
+                        atomic_number.append(atom.GetAtomicNum())
+                    z = torch.tensor(atomic_number, dtype=torch.long)
+                    molgraphs['Z'] = z
+                    
+                    pos = []
+                    for i in range(mol.GetNumAtoms()):
+                        position = mol.GetConformer().GetAtomPosition(i) 
+                        pos.append([position.x, position.y, position.z])
+                    molgraphs['pos'] = pos
                     examples.append(molgraphs)
 
                     if this_dic['atom_classification']:
                         try:
                             efg = mol2frag(mol, returnidx=True, vocabulary=list(efgs_vocabulary), toEnd=True, extra_included=True, TreatHs='include', isomericSmiles=False)
-                            molgraphs['atom_efgs'] = getAtomToEFGs(efg, efgs_vocabulary)
+                            molgraphs['atom_efgs'] = torch.tensor(getAtomToEFGs(efg, efgs_vocabulary)).view(-1).long()
                         except:
                             molgraphs['atom_efgs'] = None
 

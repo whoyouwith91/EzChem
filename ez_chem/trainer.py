@@ -67,7 +67,8 @@ def train(model, optimizer, dataloader, config, scheduler=None):
     all_loss = 0
     if config['propertyLevel'] == 'atom':
         all_atoms = 0
-
+    if config['dataset'] == 'solEFGs':
+        preds, labels = [], []
     for data in dataloader:
         data = data.to(config['device'])
         optimizer.zero_grad()
@@ -76,24 +77,34 @@ def train(model, optimizer, dataloader, config, scheduler=None):
             if config['dataset'] == 'solNMR':
                 loss = get_loss_fn(config['loss'])(y1, data.mol_y)
             else:
-                loss = get_loss_fn(config['loss'])(y1, data.y)
+                loss = get_loss_fn(config['loss'])(y1, data.mol_y)
             all_loss += loss.item() * data.num_graphs
         elif config['taskType'] == 'multi' and config['dataset'] == 'calcSolLogP/ALL':
             loss = get_loss_fn(config['loss'])(y1[:,0], data.y) + get_loss_fn(config['loss'])(y1[:,1], data.y1) + get_loss_fn(config['loss'])(y1[:,2], data.y2)
             all_loss += loss.item() * data.num_graphs
-        elif config['propertyLevel'] == 'atomMol' and config['dataset'] == 'solNMR':
-            #loss = get_loss_fn(config['loss'])(y0, data.atom_y) + get_loss_fn(config['loss'])(y1, data.mol_y)
-            #all_loss += loss.item() * data.num_graphs
-            loss = get_loss_fn(config['loss'])(y0, data.atom_y) + get_loss_fn(config['loss'])(y1, data.mol_y)
+        elif config['propertyLevel'] == 'atomMol':
+            if config['dataset'] == 'solNMR':
+                #loss = get_loss_fn(config['loss'])(y0, data.atom_y) + get_loss_fn(config['loss'])(y1, data.mol_y)
+                #all_loss += loss.item() * data.num_graphs
+                loss = get_loss_fn(config['loss'])(y0, data.atom_y) + get_loss_fn(config['loss'])(y1, data.mol_y)
+            if config['dataset'] == 'solEFGs':
+                loss = get_loss_fn(config['atom_loss'])(y0, data.atom_y) + get_loss_fn(config['mol_loss'])(y1, data.mol_y)
         elif config['propertyLevel'] == 'atom':
             if config['dataset'] == 'solNMR':
                 loss = get_loss_fn(config['loss'])(data.atom_y, y0)
                 all_loss += loss.item() * data.N.sum()
                 all_atoms += data.N.sum()
+            elif config['dataset'] == 'solEFGs':
+                loss = get_loss_fn(config['loss'])(y0, data.atom_y)
+                idx = F.log_softmax(model(data)[0], 1).argmax(dim=1)
+                preds.append(idx.detach().data.cpu().numpy())
+                labels.append(data['atom_y'].detach().data.cpu().numpy())
             else:
                 loss = get_loss_fn(config['loss'])(data.y, y0, data.mask)
                 all_atoms += data.mask.sum()
                 all_loss += loss.item() * data.mask.sum()
+        elif config['dataset'] == 'solEFGs':
+            loss = get_loss_fn(config['loss'])(data.atom_y, y0)
         else:
             raise "LossError"
  
@@ -104,7 +115,10 @@ def train(model, optimizer, dataloader, config, scheduler=None):
         if config['scheduler'] == 'NoamLR':
              scheduler.step()
     if config['propertyLevel'] == 'atom':
-        return all_loss.item() / all_atoms.item() # MAE
+        if config['dataset'] == 'solEFGs':
+            return loss.item(), get_metrics_fn(config['metrics'])(np.hstack(labels), np.hstack(preds))
+        else:
+            return all_loss.item() / all_atoms.item() # MAE
     if config['propertyLevel'] == 'molecule':
         if config['metrics'] == 'l2':
             return np.sqrt(all_loss / len(dataloader.dataset)) # RMSE
@@ -121,6 +135,8 @@ def test(model, dataloader, config):
     error = 0
     if config['propertyLevel'] == 'atom' or config['test_level'] == 'atom':
         total_N = 0
+    if config['dataset'] == 'solEFGs':
+        preds, labels = [], []
     with torch.no_grad():
         for data in dataloader:
             data = data.to(config['device'])
@@ -128,7 +144,7 @@ def test(model, dataloader, config):
                 if config['dataset'] == 'solNMR':
                     error += get_metrics_fn(config['metrics'])(model(data)[1], data.mol_y) * data.num_graphs
                 else:
-                    error += get_metrics_fn(config['metrics'])(model(data)[0], data.y) * data.num_graphs
+                    error += get_metrics_fn(config['metrics'])(model(data)[1], data.mol_y) * data.num_graphs
             elif config['taskType'] == 'multi' and config['dataset'] == 'calcSolLogP/ALL':
                 y0, _ = model(data)
                 #error += (get_metrics_fn(config['loss'])(y0[:,0], data.y) + get_metrics_fn(config['loss'])(y0[:,1], data.y1) + get_metrics_fn(config['loss'])(y0[:,2], data.y2))*data.num_graphs
@@ -137,6 +153,11 @@ def test(model, dataloader, config):
                 if config['dataset'] == 'solNMR':
                     total_N += data.N.sum().item()
                     error += get_metrics_fn(config['metrics'])(model(data)[0], data.atom_y)*data.N.sum().item()
+                elif config['dataset'] == 'solEFGs':
+                    idx = F.log_softmax(model(data)[0], 1).argmax(dim=1)
+                    #_, idx = torch.max(model(data)[0], 1)
+                    preds.append(idx.detach().data.cpu().numpy())
+                    labels.append(data['atom_y'].detach().data.cpu().numpy())
                 else:
                     total_N += data.mask.sum().item()
                     error += get_metrics_fn(config['metrics'])(model(data)[0][data.mask>0].reshape(-1,1), data.y[data.mask>0].reshape(-1,1))*data.mask.sum().item()
@@ -161,6 +182,8 @@ def test(model, dataloader, config):
                 return error.item() / total_N # MAE
             else:
                 return error.item() / len(dataloader.dataset) 
+        elif config['metrics'] == 'class':
+            return get_metrics_fn(config['metrics'])(np.hstack(labels), np.hstack(preds))
 
 def train_dropout(model, optimizer, dataloader, config):
     model.train()

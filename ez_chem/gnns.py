@@ -150,11 +150,12 @@ class pna_conv():
         self.scalers = ['identity', 'amplification', 'attenuation']
         self.emb_dim = config['emb_dim']
         self.aggr = config['aggregate']
+        self.deg = config['deg']
 
     def model(self):
         # input: x(-1, emb_dim), bond(-1, emb_dim), edge index, deg
         # return: x(-1, emb_dim)
-        return PNAConv(self.emb_dim, self.emb_dim, aggregators=self.aggregators, scalers=self.scalers, deg=deg,
+        return PNAConv(self.emb_dim, self.emb_dim, aggregators=self.aggregators, scalers=self.scalers, deg=self.deg,
                            edge_dim=self.emb_dim, towers=4, pre_layers=1, post_layers=1,
                            divide_input=False)
 
