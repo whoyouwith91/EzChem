@@ -12,17 +12,18 @@ from prettytable import PrettyTable
 import pandas as pd
 import numpy as np
 from torch.optim.lr_scheduler import _LRScheduler
+from torchcontrib.optim import SWA
 import sklearn.metrics as metrics
 
 from typing import List, Union
 from kwargs import physnet_kwargs
 
 ################### Configuration setting names ############################
-data_config = ['dataset', 'model', 'style', 'data_path', 'EFGS', 'efgs_lenth', 'num_i_2', 'train_size', 'val_size', 'batch_size']
+data_config = ['dataset', 'model', 'style', 'data_path', 'EFGS', 'efgs_lenth', 'num_i_2', 'batch_size']
 model_config = ['dataset', 'model', 'gnn_type',  'batch_size', 'emb_dim', 'act_fn' , 'weights', 'num_atom_features', 'num_tasks', 'propertyLevel', \
          'num_bond_features', 'pooling', 'NumParas', 'num_layer', 'JK', 'fully_connected_layer_sizes', 'aggregate', 'mol_features', 'tsne', \
              'residual_connect', 'resLayer', 'interaction_simpler', 'weight_regularizer', 'dropout_regularizer', 'gradCam', 'uncertainty', \
-                 'uncertaintyMode', 'drop_ratio', 'energy_shift_value', 'energy_scale_value']
+                 'uncertaintyMode', 'drop_ratio', 'energy_shift_value', 'energy_scale_value', 'deg_value']
 train_config = ['running_path', 'seed', 'num_tasks', 'propertyLevel', 'test_level', 'optimizer', 'loss', 'metrics', 'lr', 'lr_style', \
          'epochs', 'early_stopping', 'train_type', 'taskType', 'train_size', 'val_size', 'test_size', \
          'preTrainedPath', 'uncertainty', 'uncertaintyMode', 'swag_start', 'action', 'mask', 'explicit_split', 'bn']
@@ -44,6 +45,11 @@ def get_optimizer(args, model):
         optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
     if args.optimizer == 'sgd':
         optimizer = torch.optim.SGD(model.parameters(), lr=args.lr, momentum=0.9, weight_decay=1e-4)
+    if args.optimizer == 'adamW':
+        optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+    if args.optimizer == 'SWA':
+        base_opt = torch.optim.SGD(model.parameters(), lr=args.lr)
+        optimizer = SWA(base_opt, swa_start=10, swa_freq=5, swa_lr=0.0005)
     return optimizer
 
 
@@ -103,6 +109,14 @@ def MaskedMSELoss(y, x, mask):
     y_masked = y[mask>0].reshape(-1, 1)
     return F.mse_loss(x_masked, y_masked)
 
+def MaskedL1Loss(y, x, mask):
+    """
+    Masked mean squared error
+    """
+    x_masked = x[mask>0].reshape(-1, 1)
+    y_masked = y[mask>0].reshape(-1, 1)
+    return F.l1_loss(x_masked, y_masked)
+
 def get_loss_fn(name):
     if name == 'l1':
         return F.l1_loss
@@ -110,6 +124,8 @@ def get_loss_fn(name):
         return F.mse_loss
     if name == 'maskedL2':
         return MaskedMSELoss
+    if name == 'maskedL1':
+        return MaskedL1Loss
     if name == 'smooth_l1':
         return F.smooth_l1_loss
     if name == 'dropout':
@@ -174,9 +190,9 @@ def init_weights(model, config):
 
 def createResultsFile(this_dic):
     ## create pretty table
-    if this_dic['loss'] == 'l2':
+    if this_dic['loss'] in ['l2', 'maskedL2']:
         train_header = 'RMSE'
-    if this_dic['loss'] == 'l1':
+    if this_dic['loss'] in ['l1', 'maskedL1']:
         train_header = 'MAE'
     if this_dic['loss'] == 'class':
         train_header1 = 'Loss'
@@ -396,4 +412,66 @@ def getDegreeforPNA(loader):
     for data in loader:
         d = degree(data.edge_index[1], num_nodes=data.num_nodes, dtype=torch.long)
         deg += torch.bincount(d, minlength=deg.numel())
-    return deg
+    return deg, str(list(deg.numpy()))
+
+def getScaleandShift(config):
+    if config['dataset'] in ['deepchem/freesol']:
+            energy_shift = torch.tensor([-0.448323499821181])
+            energy_scale = torch.tensor([0.5231881290032624])
+    if config['dataset'] in ['deepchem/delaney']:
+            energy_shift = torch.tensor([-0.12582392787107535])
+            energy_scale = torch.tensor([0.09535901863588805])
+    if config['dataset'] in ['deepchem/logp']:
+            energy_shift = torch.tensor([0.04861841981877047])
+            energy_scale = torch.tensor([0.03197769536926355])
+    if config['dataset'] in ['mp/bradley']:
+            energy_shift = torch.tensor([2.6049698263964354])
+            energy_scale = torch.tensor([5.931774882494167])
+    if config['dataset'] in ['qm9/nmr/allAtoms']: # loading physnet params
+            energy_shift = torch.tensor([67.2858])
+            energy_scale = torch.tensor([85.8406])
+    if config['dataset'] in ['qm9/nmr/carbon']: # loading physnet params
+            energy_shift = torch.tensor([115.9782138561384])
+            energy_scale = torch.tensor([51.569003335315905])
+    if config['dataset'] in ['qm9/nmr/hydrogen']: # loading physnet params
+            energy_shift = torch.tensor([29.08285732440852])
+            energy_scale = torch.tensor([1.9575037908857158])
+    if config['dataset'] in ['qm9/u0', 'qm9/allAtoms']:
+            energy_shift = torch.tensor([-4.1164152221029555])
+            energy_scale = torch.tensor([0.9008408776783313])
+    if config['dataset'] in ['nmr/carbon']:
+            energy_shift = torch.tensor([98.23851013183594])
+            energy_scale = torch.tensor([51.27542495727539])
+    if config['dataset'] in ['nmr/hydrogen']:
+            energy_shift = torch.tensor([4.6759105])
+            energy_scale = torch.tensor([2.6481516])
+    if config['dataset'] in ['sol_calc/ALL']:
+            energy_shift = torch.tensor([-0.754434680278891])
+            energy_scale = torch.tensor([0.49311241777304765])
+    if config['dataset'] in ['solALogP', 'solNMR']:
+            if config['propertyLevel'] == 'multiMol':
+                energy_shift = torch.tensor([-4.232369738478913]) # eV for smaller gas energy
+                energy_scale = torch.tensor([0.3176761953853432]) # eV for smaller gas energy 
+            elif config['propertyLevel'] in ['molecule', 'atomMol']:
+                energy_shift = torch.tensor([-0.016289007907758023]) # eV for smaller solvation 
+                energy_scale = torch.tensor([0.011774938538003136]) # eV for smaller solvation 
+            elif config['propertyLevel'] == 'atom':
+                energy_shift = torch.tensor([75.4205])
+                energy_scale = torch.tensor([151.0311])
+            else:
+                energy_shift = torch.tensor([0.])
+                energy_scale = torch.tensor([1.])
+    config['energy_shift'], config['energy_shift_value'] = energy_shift, energy_shift.item()
+    config['energy_scale'], config['energy_scale_value'] = energy_scale, energy_scale.item()
+    
+    return config
+
+def getElements(dataframe):
+    assert 'SMILES' in dataframe.columns
+    element = set()
+    for smi in dataframe['SMILES']:
+        mol = Chem.MolFromSmiles(smi)
+        for c in [atom.GetSymbol() for atom in mol.GetAtoms()]:
+            element.add(c)
+        #break
+    return element

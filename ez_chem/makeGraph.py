@@ -1,4 +1,4 @@
-import os, sys, math, json, argparse, logging, time, random
+import os, sys, math, json, argparse, logging, time, random, pickle
 from datetime import datetime
 import torch
 import numpy as np
@@ -8,9 +8,22 @@ from sklearn.model_selection import train_test_split
 from mordred import Calculator, descriptors
 from rdkit import Chem
 from rdkit.Chem import Descriptors
+from rdkit.Chem import rdMolDescriptors
 from rdkit.ML.Descriptors import MoleculeDescriptors
 from three_level_frag import cleavage, AtomListToSubMol, standize, mol2frag, WordNotFoundError, counter
 from torch_geometric.utils.convert import to_networkx, from_networkx
+from deepchem.feat import BPSymmetryFunctionInput, CoulombMatrix, CoulombMatrixEig
+from deepchem.utils import conformers
+from dscribe.descriptors import ACSF
+from rdkit.Chem.rdmolfiles import MolToXYZFile
+from ase.io import read as ase_read
+from rdkit import Chem
+from rdkit.Chem import AllChem, TorsionFingerprints
+from rdkit.ML.Cluster import Butina
+
+def gen_conformers(mol, numConfs=100, maxAttempts=1000, pruneRmsThresh=0.1, useExpTorsionAnglePrefs=True, useBasicKnowledge=True, enforceChirality=True):
+	ids = AllChem.EmbedMultipleConfs(mol, numConfs=numConfs, maxAttempts=maxAttempts, pruneRmsThresh=pruneRmsThresh, useExpTorsionAnglePrefs=useExpTorsionAnglePrefs, useBasicKnowledge=useBasicKnowledge, enforceChirality=enforceChirality, numThreads=0, randomSeed=1)
+	return list(ids)
 
 def parse_input_arguments():
     parser = argparse.ArgumentParser(description='Physicochemical prediction')
@@ -20,8 +33,12 @@ def parse_input_arguments():
     parser.add_argument('--usePeriodics', action='store_true')
     parser.add_argument('--mol_features', action='store_true')
     parser.add_argument('--atom_classification', action='store_true')
+    parser.add_argument('--BPS', action='store_true')
+    parser.add_argument('--ACSF', action='store_true')
+    parser.add_argument('--xyz', type=str)
     parser.add_argument('--save_path', type=str, default='/scratch/dz1061/gcn/chemGraph/data/')
     parser.add_argument('--style', type=str, help='it is for base or different experiments')
+    parser.add_argument('--task', type=str)
     return parser.parse_args()
 
 def main():
@@ -39,27 +56,33 @@ def main():
         valid_raw = pd.read_csv(os.path.join(alldatapath, args.dataset, 'split', args.style, 'valid.csv'), names=['SMILES', 'target1', 'target2', 'target3'])
         test_raw = pd.read_csv(os.path.join(alldatapath, args.dataset, 'split', args.style, 'test.csv'), names=['SMILES', 'target1', 'target2', 'target3'])
     
-    elif this_dic['dataset'] == 'solNMR': # multitask
+    elif this_dic['dataset'] in ['solNMR', 'solALogP']: # multitask
         train_raw = torch.load(os.path.join(alldatapath, args.dataset, 'split', args.style, 'smaller_solNMR_train.pt'))
         valid_raw = torch.load(os.path.join(alldatapath, args.dataset, 'split', args.style, 'smaller_solNMR_valid.pt'))
         test_raw = torch.load(os.path.join(alldatapath, args.dataset, 'split', args.style, 'smaller_solNMR_test.pt'))
+    
+    elif this_dic['dataset'] in ['nmr/carbon', 'nmr/hydrogen']: # multitask
+        train_raw = pickle.load(open('/scratch/dz1061/gcn/chemGraph/data/{}/split/base/train.pickle'.format(args.dataset), 'rb'))
+        test_raw = pickle.load(open('/scratch/dz1061/gcn/chemGraph/data/{}/split/base/test.pickle'.format(args.dataset), 'rb'))
+    
     else: 
-        if this_dic['dataset'] not in ['sol_calc/ALL', 'solOct_calc/ALL', 'logp_calc/ALL', 'xlogp3']:
-            train_raw = pd.read_csv(os.path.join(alldatapath, args.dataset, 'split', args.style, 'train.csv'), names=['SMILES', 'target'])
-            valid_raw = pd.read_csv(os.path.join(alldatapath, args.dataset, 'split', args.style, 'valid.csv'), names=['SMILES', 'target'])
-            test_raw = pd.read_csv(os.path.join(alldatapath, args.dataset, 'split', args.style, 'test.csv'), names=['SMILES', 'target'])
-        if this_dic['dataset'] in ['sol_calc/ALL', 'solOct_calc/ALL', 'logp_calc/ALL', 'xlogp3']:
-            train_raw = pd.read_csv(os.path.join(alldatapath, args.dataset, 'split', args.style, 'train.csv'), names=['SMILES', 'target'])
-            valid_raw = pd.read_csv(os.path.join(alldatapath, args.dataset, 'split', args.style, 'valid.csv'), names=['SMILES', 'target'])
-            test_raw = pd.read_csv(os.path.join(alldatapath, args.dataset, 'split', args.style, 'test.csv'), names=['SMILES', 'target'])
+        train_raw = pd.read_csv(os.path.join(alldatapath, args.dataset, 'split', args.style, 'train.csv'), names=['SMILES', 'target'])
+        valid_raw = pd.read_csv(os.path.join(alldatapath, args.dataset, 'split', args.style, 'valid.csv'), names=['SMILES', 'target'])
+        test_raw = pd.read_csv(os.path.join(alldatapath, args.dataset, 'split', args.style, 'test.csv'), names=['SMILES', 'target'])
     
     if this_dic['atom_classification']: # for different datasets using different vocabulary
         efgs_vocabulary = torch.load('/scratch/dz1061/gcn/chemGraph/data/sol_calc/ALL/split/base/all_info/Frag20-EFGs.pt')
     
     if this_dic['format'] == 'graphs':
         examples = []
-        if this_dic['dataset'] == 'solNMR':
+        if this_dic['dataset'] in ['solNMR', 'solALogP']:
             all_data = {**train_raw, **valid_raw, **test_raw}
+        elif this_dic['dataset'] in ['nmr/carbon', 'nmr/hydrogen']:
+            all_data = pd.concat([train_raw, test_raw])
+        elif this_dic['dataset'] == 'qm9/u0':
+            suppl = torch.load('/scratch/dz1061/gcn/chemGraph/data/qm9/raw/molObjects.pt')
+            u0 = pickle.load(open('/scratch/dz1061/gcn/chemGraph/data/qm9/raw/U0_rev.pickle', 'rb'))
+            nmr = pickle.load(open('/scratch/dz1061/gcn/chemGraph/data/qm9/raw/qm9_NMR.pickle', 'rb'))
         else:
             all_data = pd.concat([train_raw, valid_raw, test_raw])
         
@@ -124,17 +147,39 @@ def main():
                 torch.save(examples, os.path.join(this_dic['save_path'], args.dataset, args.format, args.style, this_dic['model'], 'raw', 'temp.pt'))
                 print('Finishing processing {} compounds'.format(all_data.shape[0]))
 
-            if this_dic['dataset'] == 'solNMR':
+            elif this_dic['dataset'] == 'solNMR':
+                if this_dic['ACSF']:
+                    acsf = ACSF(
+                                species=['B', 'Br', 'C', 'Cl', 'F', 'H', 'N', 'O', 'P', 'S'],
+                                rcut=10.0,
+                                g2_params=[[1, 1], [1, 2], [1, 3]],
+                                g4_params=[[1, 1, 1], [1, 2, 1], [1, 1, -1], [1, 2, -1]],)
+
                 for d, value in all_data.items():
                     molgraphs = {}
-                    mol = value[0][0]
+                    mol = value[0]
                     mol_graph = MolGraph(mol, args.usePeriodics, this_dic['model'])
+                    
+                    if not this_dic['ACSF']:
+                        molgraphs['x'] = torch.FloatTensor(mol_graph.f_atoms)
+                    if this_dic['ACSF']:
+                        if not os.path.exists(os.path.join(alldatapath, 'solALogP', 'split', args.style, this_dic['xyz'], '{}.xyz'.format(d))):
+                            MolToXYZFile(mol, os.path.join(alldatapath, 'solALogP', 'split', args.style, this_dic['xyz'], '{}.xyz'.format(d)))
+                        atoms = ase_read(os.path.join(alldatapath, 'solALogP', 'split', args.style, this_dic['xyz'], '{}.xyz'.format(d)))
+                        molgraphs['x'] = torch.FloatTensor(acsf.create(atoms, positions=range(mol.GetNumAtoms())))
 
-                    molgraphs['x'] = torch.FloatTensor(mol_graph.f_atoms)
                     molgraphs['edge_attr'] = torch.FloatTensor(mol_graph.f_bonds)
                     molgraphs['edge_index'] = torch.LongTensor(np.concatenate([mol_graph.at_begin, mol_graph.at_end]).reshape(2,-1))
-                    molgraphs['mol_y'] = torch.FloatTensor([value[0][1]])
-                    molgraphs['atom_y'] = torch.FloatTensor(value[0][2])
+                    if this_dic['task'] == 'single':
+                        molgraphs['mol_sol_wat'] = torch.FloatTensor([value[1][3]])
+                    if this_dic['task'] == 'multi':
+                        molgraphs['mol_gas'] = torch.FloatTensor([value[1][0]])
+                        molgraphs['mol_wat'] = torch.FloatTensor([value[1][1]])
+                        molgraphs['mol_oct'] = torch.FloatTensor([value[1][2]])
+                        molgraphs['mol_sol_wat'] = torch.FloatTensor([value[1][3]])
+                        molgraphs['mol_sol_oct'] = torch.FloatTensor([value[1][4]])
+                        molgraphs['mol_sol_logp'] = torch.FloatTensor([value[1][5]])
+                    molgraphs['atom_y'] = torch.FloatTensor(value[2])
                     molgraphs['N'] = torch.FloatTensor([mol.GetNumAtoms()])
                     
                     atomic_number = []
@@ -160,28 +205,239 @@ def main():
                 if not os.path.exists(os.path.join(this_dic['save_path'], args.dataset, args.format, args.style, this_dic['model'], 'raw')):
                     os.makedirs(os.path.join(this_dic['save_path'], args.dataset, args.format, args.style, this_dic['model'], 'raw'))
                 torch.save(examples, os.path.join(this_dic['save_path'], args.dataset, args.format, args.style, this_dic['model'], 'raw', 'temp.pt')) ###
-                print('Finishing processing {} compounds'.format(len(all_data)))
+                print('Finishing processing {} compounds'.format(len(examples)))
+
+            elif this_dic['dataset'] == 'solALogP':
+                if this_dic['ACSF']:
+                    acsf = ACSF(
+                                species=['B', 'Br', 'C', 'Cl', 'F', 'H', 'N', 'O', 'P', 'S'],
+                                rcut=10.0,
+                                g2_params=[[1, 1], [1, 2], [1, 3]],
+                                g4_params=[[1, 1, 1], [1, 2, 1], [1, 1, -1], [1, 2, -1]],)
+                for d, value in all_data.items():
+                    molgraphs = {}
+                    mol = value[0]
+                    mol_graph = MolGraph(mol, args.usePeriodics, this_dic['model'])
+
+                    if not this_dic['ACSF']:
+                        molgraphs['x'] = torch.FloatTensor(mol_graph.f_atoms)
+                    if this_dic['BPS']:
+                        bp_features = torch.FloatTensor(bp_sym(mol)[0, :mol.GetNumAtoms(), 1:])
+                        molgraphs['x'] = torch.cat([molgraphs['x'], bp_features], 1)
+                    if this_dic['ACSF']:
+                        if not os.path.exists(os.path.join(alldatapath, args.dataset, 'split', args.style, this_dic['xyz'], '{}.xyz'.format(d))):
+                            MolToXYZFile(mol, os.path.join(alldatapath, args.dataset, 'split', args.style, this_dic['xyz'], '{}.xyz'.format(d)))
+                        atoms = ase_read(os.path.join(alldatapath, args.dataset, 'split', args.style, this_dic['xyz'], '{}.xyz'.format(d)))
+                        molgraphs['x'] = torch.FloatTensor(acsf.create(atoms, positions=range(mol.GetNumAtoms())))
+                    
+                    atomic_number = []
+                    for atom in mol.GetAtoms():
+                        atomic_number.append(atom.GetAtomicNum())
+                    z = torch.tensor(atomic_number, dtype=torch.long)
+                    molgraphs['Z'] = z
+
+                    molgraphs['edge_attr'] = torch.FloatTensor(mol_graph.f_bonds)
+                    molgraphs['edge_index'] = torch.LongTensor(np.concatenate([mol_graph.at_begin, mol_graph.at_end]).reshape(2,-1))
+                    if this_dic['task'] == 'single':
+                        molgraphs['mol_sol_wat'] = torch.FloatTensor([value[1][3]])
+                    if this_dic['task'] == 'multi':
+                        molgraphs['mol_gas'] = torch.FloatTensor([value[1][0]])
+                        molgraphs['mol_wat'] = torch.FloatTensor([value[1][1]])
+                        molgraphs['mol_oct'] = torch.FloatTensor([value[1][2]])
+                        molgraphs['mol_sol_wat'] = torch.FloatTensor([value[1][3]])
+                        molgraphs['mol_sol_oct'] = torch.FloatTensor([value[1][4]])
+                        molgraphs['mol_sol_logp'] = torch.FloatTensor([value[1][5]])
+                    molgraphs['atom_y'] = torch.FloatTensor([i[0] for i in rdMolDescriptors._CalcCrippenContribs(mol)])
+                    molgraphs['N'] = torch.FloatTensor([mol.GetNumAtoms()])
+                    
+                    if this_dic['atom_classification']:
+                        try:
+                            efg = mol2frag(mol, returnidx=True, vocabulary=list(efgs_vocabulary), toEnd=True, extra_included=True, TreatHs='include', isomericSmiles=False)
+                            molgraphs['atom_efgs'] = torch.tensor(getAtomToEFGs(efg, efgs_vocabulary)).view(-1).long()
+                        except:
+                            molgraphs['atom_efgs'] = None
+                    examples.append(molgraphs)
+
+                if not os.path.exists(os.path.join(this_dic['save_path'], args.dataset, args.format, args.style, this_dic['model'], 'raw')):
+                    os.makedirs(os.path.join(this_dic['save_path'], args.dataset, args.format, args.style, this_dic['model'], 'raw'))
+                torch.save(examples, os.path.join(this_dic['save_path'], args.dataset, args.format, args.style, this_dic['model'], 'raw', 'temp.pt')) ###
+                print('Finishing processing {} compounds'.format(len(examples)))
+
+            elif this_dic['dataset'] == 'qm9/u0':
+                if this_dic['ACSF']:
+                    acsf = ACSF(
+                                species=['C', 'F', 'H', 'N', 'O'],
+                                rcut=10.0,
+                                g2_params=[[1, 1], [1, 2], [1, 3]],
+                                g4_params=[[1, 1, 1], [1, 2, 1], [1, 1, -1], [1, 2, -1]],)
+                for name, mol in suppl.items():
+                    #name = mol.GetProp('_Name')
+                    if name not in nmr.keys():
+                        continue
+                    molgraphs = {}
+                    #mol = value[0][0]
+                    mol_graph = MolGraph(mol, args.usePeriodics, this_dic['model'])
+
+                    if not this_dic['ACSF']:
+                        molgraphs['x'] = torch.FloatTensor(mol_graph.f_atoms)
+                    if this_dic['BPS']:
+                        bp_features = torch.FloatTensor(bp_sym(mol)[0, :mol.GetNumAtoms(), 1:])
+                        molgraphs['x'] = torch.cat([molgraphs['x'], bp_features], 1)
+                    if this_dic['ACSF']:
+                        if not os.path.exists(os.path.join(alldatapath, args.dataset, 'split', args.style, this_dic['xyz'], '{}.xyz'.format(name))):
+                            MolToXYZFile(mol, os.path.join(alldatapath, args.dataset, 'split', args.style, this_dic['xyz'], '{}.xyz'.format(name)))
+                        atoms = ase_read(os.path.join(alldatapath, args.dataset, 'split', args.style, this_dic['xyz'], '{}.xyz'.format(name)))
+                        molgraphs['x'] = torch.FloatTensor(acsf.create(atoms, positions=range(mol.GetNumAtoms())))
+                    
+                    atomic_number = []
+                    for atom in mol.GetAtoms():
+                        atomic_number.append(atom.GetAtomicNum())
+                    z = torch.tensor(atomic_number, dtype=torch.long)
+                    molgraphs['Z'] = z
+
+                    molgraphs['edge_attr'] = torch.FloatTensor(mol_graph.f_bonds)
+                    molgraphs['edge_index'] = torch.LongTensor(np.concatenate([mol_graph.at_begin, mol_graph.at_end]).reshape(2,-1))
+                    
+                    molgraphs['atom_y'] = torch.FloatTensor(nmr[name])
+                    molgraphs['mol_y'] = torch.FloatTensor([u0[name]])
+                    #molgraphs['atom_y'] = torch.FloatTensor([i[0] for i in rdMolDescriptors._CalcCrippenContribs(mol)])
+                    molgraphs['N'] = torch.FloatTensor([mol.GetNumAtoms()])
+                    
+                    if this_dic['atom_classification']:
+                        try:
+                            efg = mol2frag(mol, returnidx=True, vocabulary=list(efgs_vocabulary), toEnd=True, extra_included=True, TreatHs='include', isomericSmiles=False)
+                            molgraphs['atom_efgs'] = torch.tensor(getAtomToEFGs(efg, efgs_vocabulary)).view(-1).long()
+                        except:
+                            molgraphs['atom_efgs'] = None
+                    examples.append(molgraphs)
+
+                if not os.path.exists(os.path.join(this_dic['save_path'], args.dataset, args.format, args.style, this_dic['model'], 'raw')):
+                    os.makedirs(os.path.join(this_dic['save_path'], args.dataset, args.format, args.style, this_dic['model'], 'raw'))
+                torch.save(examples, os.path.join(this_dic['save_path'], args.dataset, args.format, args.style, this_dic['model'], 'raw', 'temp.pt')) ###
+                print('Finishing processing {} compounds'.format(len(examples)))
+
+            elif this_dic['dataset'] in ['nmr/carbon', 'nmr/hydrogen']:
+                if this_dic['ACSF']:
+                    acsf = ACSF(
+                                species=['B', 'Br', 'C', 'Cl', 'F', 'H', 'N', 'O', 'P', 'S'],
+                                rcut=10.0,
+                                g2_params=[[1, 1], [1, 2], [1, 3]],
+                                g4_params=[[1, 1, 1], [1, 2, 1], [1, 1, -1], [1, 2, -1]],)
+                for id_, mol, tar in zip(all_data['molecule_id'], all_data['rdmol'], all_data['value']):
+                    molgraphs = {}
+                    mol_graph = MolGraph(mol, args.usePeriodics, this_dic['model'])
+
+                    if not this_dic['ACSF']:
+                        molgraphs['x'] = torch.FloatTensor(mol_graph.f_atoms)
+                    if this_dic['ACSF']:
+                        if not os.path.exists(os.path.join(alldatapath, args.dataset, 'split', args.style, this_dic['xyz'], '{}.xyz'.format(id_))):
+                            continue
+                        atoms = ase_read(os.path.join(alldatapath, args.dataset, 'split', args.style, this_dic['xyz'], '{}.xyz'.format(id_)))
+                        molgraphs['x'] = torch.FloatTensor(acsf.create(atoms, positions=range(mol.GetNumAtoms())))
+                    
+                    atomic_number = []
+                    for atom in mol.GetAtoms():
+                        atomic_number.append(atom.GetAtomicNum())
+                    z = torch.tensor(atomic_number, dtype=torch.long)
+                    molgraphs['Z'] = z
+                    molgraphs['N'] = torch.FloatTensor([mol.GetNumAtoms()])
+
+                    molgraphs['edge_attr'] = torch.FloatTensor(mol_graph.f_bonds)
+                    molgraphs['edge_index'] = torch.LongTensor(np.concatenate([mol_graph.at_begin, mol_graph.at_end]).reshape(2,-1))
+                    mask = np.zeros((mol.GetNumAtoms(), 1), dtype=np.float32)
+                    vals = np.zeros((mol.GetNumAtoms(), 1), dtype=np.float32)
+                    for k, v in tar[0].items():
+                        mask[int(k), 0] = 1.0
+                        vals[int(k), 0] = v
+                    molgraphs['atom_y'] = torch.FloatTensor(vals).flatten()
+                    molgraphs['mask'] = torch.FloatTensor(mask).flatten()
+                    
+                    examples.append(molgraphs)
+
+                if not os.path.exists(os.path.join(this_dic['save_path'], args.dataset, args.format, args.style, this_dic['model'], 'raw')):
+                    os.makedirs(os.path.join(this_dic['save_path'], args.dataset, args.format, args.style, this_dic['model'], 'raw'))
+                torch.save(examples, os.path.join(this_dic['save_path'], args.dataset, args.format, args.style, this_dic['model'], 'raw', 'temp.pt')) ###
+                print('Finishing processing {} compounds'.format(len(examples)))
 
             else:
+                
+                if this_dic['ACSF']:
+                    if this_dic['dataset'] in ['sol_exp', 'deepchem/freesol', 'deepchem/delaney']:
+                        species = ['Br', 'C', 'Cl', 'F', 'H', 'I', 'N', 'O', 'P', 'S']
+                        periodic = False
+                    if this_dic['dataset'] in ['deepchem/logp']:
+                        #species = ['B', 'Br', 'C', 'Cl', 'F', 'I', 'N', 'O', 'P', 'S', 'Se', 'Si', 'H']
+                        species = ['B', 'Br', 'C', 'Cl', 'F', 'H', 'N', 'O', 'P', 'S']
+                        periodic = False
+                    if this_dic['dataset'] == 'sol_calc/ALL':
+                        species = ['B', 'Br', 'C', 'Cl', 'F', 'H', 'N', 'O', 'P', 'S']
+                        periodic = False
+                    if this_dic['dataset'] == 'mp/bradley':
+                        species = ['B', 'Br', 'C', 'Cl', 'F', 'I', 'N', 'O', 'P', 'S', 'Si', 'H']
+                        periodic = True
+                    acsf = ACSF(
+                                species=species,
+                                rcut=10.0,
+                                g2_params=[[1, 1], [1, 2], [1, 3]],
+                                g4_params=[[1, 1, 1], [1, 2, 1], [1, 1, -1], [1, 2, -1]],
+                                periodic=periodic)
+
                 for idx, smi, tar in zip(range(all_data.shape[0]), all_data['SMILES'], all_data['target']):
                     molgraphs = {}
                     
+                    if not Chem.MolFromSmiles(smi): # be careful with this. 
+                        continue
+                    if this_dic['dataset'] in ['deepchem/logp'] and not set([atom.GetSymbol() for atom in Chem.MolFromSmiles(smi).GetAtoms()]) < set(['B', 'Br', 'C', 'Cl', 'F', 'H', 'N', 'O', 'P', 'S']):
+                        continue
                     mol_graph = MolGraph(smi, args.usePeriodics, this_dic['model'])
-                    molgraphs['x'] = torch.FloatTensor(mol_graph.f_atoms)
+                    if not this_dic['ACSF']:
+                        molgraphs['x'] = torch.FloatTensor(mol_graph.f_atoms)
+                        mol = Chem.MolFromSmiles(smi)
+                    else: # ACSF
+                        mol = Chem.MolFromSmiles(smi)
+                        mol = Chem.AddHs(mol)
+                        mol_graph = MolGraph(mol, args.usePeriodics, this_dic['model'])
+
+                    if this_dic['ACSF']:
+                        if this_dic['dataset'] == 'sol_calc/ALL':
+                            if not os.path.exists(os.path.join(alldatapath, args.dataset, 'split', args.style, this_dic['xyz'], '{}.xyz'.format(idx))):
+                                mol = Chem.MolFromSmiles(smi)
+                                m = Chem.AddHs(mol)
+                                conformerIds = gen_conformers(m, 1)
+                                if not conformerIds:
+                                    continue
+                                MolToXYZFile(m, os.path.join(alldatapath, args.dataset, 'split', args.style, this_dic['xyz'], '{}.xyz'.format(idx)), confId=conformerIds[0])
+                            else:
+                                #print(smi)
+                                mol = Chem.MolFromSmiles(smi)
+                                m = Chem.AddHs(mol)
+                        else:
+                            if not os.path.exists(os.path.join(alldatapath, args.dataset, 'split', args.style, this_dic['xyz'], '{}.xyz'.format(idx))):
+                                continue
+                        atoms = ase_read(os.path.join(alldatapath, args.dataset, 'split', args.style, this_dic['xyz'], '{}.xyz'.format(idx)))
+                        molgraphs['x'] = torch.FloatTensor(acsf.create(atoms, positions=range(mol.GetNumAtoms())))
+
+                    atomic_number = []
+                    for atom in mol.GetAtoms():
+                        atomic_number.append(atom.GetAtomicNum())
+                    z = torch.tensor(atomic_number, dtype=torch.long)
+                    molgraphs['Z'] = z
+
+                    molgraphs['N'] = torch.FloatTensor([mol.GetNumAtoms()])                    
                     molgraphs['edge_attr'] = torch.FloatTensor(mol_graph.f_bonds)
                     molgraphs['edge_index'] = torch.LongTensor(np.concatenate([mol_graph.at_begin, mol_graph.at_end]).reshape(2,-1))
-                    if this_dic['dataset'] not in ['zinc', 'nmr']:
-                        molgraphs['y'] = torch.FloatTensor([tar])
+                    molgraphs['mol_y'] = torch.FloatTensor([tar])
+                    
                     if this_dic['dataset'] in ['nmr']:
                         mask = np.zeros((molgraphs['x'].shape[0], 1), dtype=np.float32)
                         vals = np.zeros((molgraphs['x'].shape[0], 1), dtype=np.float32)
                         for k, v in tar[0].items():
                             mask[int(k), 0] = 1.0
                             vals[int(k), 0] = v
-                        molgraphs['y'] = torch.FloatTensor(vals).flatten()
+                        molgraphs['atom_y'] = torch.FloatTensor(vals).flatten()
                         molgraphs['mask'] = torch.FloatTensor(mask).flatten()
-                    if this_dic['dataset'] not in ['zinc', 'nmr']:
-                        molgraphs['smiles'] = smi
+                    
+                    molgraphs['smiles'] = smi
                     if this_dic['mol_features']:
                         if this_dic['dataset'] == 'sol_calc/ALL':
                             #select_index_rdkit = [0, 36, 41, 46, 49, 50, 52, 58, 66, 78, 80, 81, 84, 95, 98, 103, 105, 112, 113]
@@ -204,7 +460,7 @@ def main():
                 if not os.path.exists(os.path.join(this_dic['save_path'], args.dataset, args.format, args.style, this_dic['model'], 'raw')):
                     os.makedirs(os.path.join(this_dic['save_path'], args.dataset, args.format, args.style, this_dic['model'], 'raw'))
                 torch.save(examples, os.path.join(this_dic['save_path'], args.dataset, args.format, args.style, this_dic['model'], 'raw', 'temp.pt')) ###
-                print('Finishing processing {} compounds'.format(all_data.shape[0]))
+                print('Finishing processing {} compounds'.format(len(examples)))
     
     if this_dic['format'] == 'descriptors':
         descriptors = list(np.array(Descriptors._descList)[:,0])

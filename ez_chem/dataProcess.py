@@ -67,29 +67,6 @@ def gaussian_rbf(D, centers, widths, cutoff, return_dict=False):
     else:
         return rbf
 
-widths = torch.tensor([1024.0930, 1024.0930, 1024.0930, 1024.0930, 1024.0930, 1024.0930,
-        1024.0930, 1024.0930, 1024.0930, 1024.0930, 1024.0930, 1024.0930,
-        1024.0930, 1024.0930, 1024.0930, 1024.0930, 1024.0930, 1024.0930,
-        1024.0930, 1024.0930, 1024.0930, 1024.0930, 1024.0930, 1024.0930,
-        1024.0930, 1024.0930, 1024.0930, 1024.0930, 1024.0930, 1024.0930,
-        1024.0930, 1024.0930, 1024.0930, 1024.0930, 1024.0930, 1024.0930,
-        1024.0930, 1024.0930, 1024.0930, 1024.0930, 1024.0930, 1024.0930,
-        1024.0930, 1024.0930, 1024.0930, 1024.0930, 1024.0930, 1024.0930,
-        1024.0930, 1024.0930, 1024.0930, 1024.0930, 1024.0930, 1024.0930,
-        1024.0930, 1024.0930, 1024.0930, 1024.0930, 1024.0930, 1024.0930,
-        1024.0930, 1024.0930, 1024.0930, 1024.0930])
-centers = torch.tensor([1.0000e+00, 9.8413e-01, 9.6826e-01, 9.5238e-01, 9.3651e-01, 9.2064e-01,
-        9.0477e-01, 8.8889e-01, 8.7302e-01, 8.5715e-01, 8.4128e-01, 8.2540e-01,
-        8.0953e-01, 7.9366e-01, 7.7779e-01, 7.6192e-01, 7.4604e-01, 7.3017e-01,
-        7.1430e-01, 6.9843e-01, 6.8255e-01, 6.6668e-01, 6.5081e-01, 6.3494e-01,
-        6.1906e-01, 6.0319e-01, 5.8732e-01, 5.7145e-01, 5.5558e-01, 5.3970e-01,
-        5.2383e-01, 5.0796e-01, 4.9209e-01, 4.7621e-01, 4.6034e-01, 4.4447e-01,
-        4.2860e-01, 4.1273e-01, 3.9685e-01, 3.8098e-01, 3.6511e-01, 3.4924e-01,
-        3.3336e-01, 3.1749e-01, 3.0162e-01, 2.8575e-01, 2.6987e-01, 2.5400e-01,
-        2.3813e-01, 2.2226e-01, 2.0639e-01, 1.9051e-01, 1.7464e-01, 1.5877e-01,
-        1.4290e-01, 1.2702e-01, 1.1115e-01, 9.5279e-02, 7.9407e-02, 6.3535e-02,
-        4.7662e-02, 3.1790e-02, 1.5918e-02, 4.5396e-05])
-cutoff = torch.tensor(10.)
 
 class MyPreTransform(object):
     def __call__(self, data):
@@ -152,7 +129,7 @@ class knnGraph(InMemoryDataset):
 
     @property
     def processed_file_names(self):
-        return '1-2-whole.pt'
+        return 'processed.pt'
     
     def download(self):
         pass
@@ -164,9 +141,11 @@ class knnGraph(InMemoryDataset):
                 x=d['x'],
                 edge_index=d['edge_index'],
                 edge_attr=d['edge_attr'],
-                mol_y=d['y'],
-                smiles=d['smiles'],
-                ids=d['id']
+                mol_y=d['mol_y'],
+                Z=d['Z'],
+                N=d['N']
+                #smiles=d['smiles'],
+                #ids=d['id']
                 ) for d in raw_data_list
         ]
 
@@ -179,6 +158,54 @@ class knnGraph(InMemoryDataset):
         data, slices = self.collate(data_list)
         torch.save((data, slices), self.processed_paths[0])
 #------------------Naive-------------------------------------
+
+#------------------Atom-level and mol-level-------------------------------------
+class knnGraph_atom(InMemoryDataset):
+    def __init__(self,
+                 root,
+                 transform=None,
+                 pre_transform=None,
+                 pre_filter=None):
+        super(knnGraph_atom, self).__init__(root, transform, pre_transform, pre_filter)
+        self.type = type
+        self.data, self.slices = torch.load(self.processed_paths[0])
+
+    @property
+    def raw_file_names(self):
+        return 'temp.pt'
+
+    @property
+    def processed_file_names(self):
+        return 'processed.pt'
+    
+    def download(self):
+        pass
+
+    def process(self):
+        raw_data_list = torch.load(self.raw_paths[0])
+        data_list = [
+            Data(
+                x=d['x'],
+                edge_index=d['edge_index'],
+                edge_attr=d['edge_attr'],
+                atom_y=d['atom_y'],
+                mol_sol_wat=d['mol_sol_wat'],
+                Z=d['Z'],
+                N=d['N']
+                #smiles=d['smiles'],
+                #ids=d['id']
+                ) for d in raw_data_list
+        ]
+
+        if self.pre_filter is not None:
+            data_list = [data for data in data_list if self.pre_filter(data)]
+
+        if self.pre_transform is not None:
+            data_list = [self.pre_transform(data) for data in data_list]
+
+        data, slices = self.collate(data_list)
+        torch.save((data, slices), self.processed_paths[0])
+#------------------Atom-level and mol-level-------------------------------------
 
 #------------------solEFGs-------------------------------------
 class knnGraph_solEFGs(InMemoryDataset):
@@ -254,10 +281,57 @@ class knnGraph_solNMR(InMemoryDataset):
                 edge_index=d['edge_index'],
                 edge_attr=d['edge_attr'],
                 atom_y=d['atom_y'],
-                mol_y=d['mol_y'],
+                mol_sol_wat=d['mol_sol_wat'],
                 N=d['N'],
                 pos=d['pos'],
                 Z=d['Z']
+                #smiles=d['smiles'],
+                #ids=d['id']
+                ) for d in raw_data_list
+        ]
+
+        if self.pre_filter is not None:
+            data_list = [data for data in data_list if self.pre_filter(data)]
+
+        if self.pre_transform is not None:
+            data_list = [self.pre_transform(data) for data in data_list]
+
+        data, slices = self.collate(data_list)
+        torch.save((data, slices), self.processed_paths[0])
+#------------------solNMR-------------------------------------
+
+#------------------solALogP-------------------------------------
+class knnGraph_solALogP(InMemoryDataset): # TODO
+    def __init__(self,
+                 root,
+                 transform=None,
+                 pre_transform=None,
+                 pre_filter=None):
+        super(knnGraph_solALogP, self).__init__(root, transform, pre_transform, pre_filter)
+        self.type = type
+        self.data, self.slices = torch.load(self.processed_paths[0])
+
+    @property
+    def raw_file_names(self):
+        return 'temp.pt'
+
+    @property
+    def processed_file_names(self):
+        return 'processed.pt'
+    
+    def download(self):
+        pass
+
+    def process(self):
+        raw_data_list = torch.load(self.raw_paths[0])
+        data_list = [
+            Data(
+                x=d['x'],
+                edge_index=d['edge_index'],
+                edge_attr=d['edge_attr'],
+                atom_y=d['atom_y'],
+                mol_sol_wat=d['mol_y'],
+                N=d['N'],
                 #smiles=d['smiles'],
                 #ids=d['id']
                 ) for d in raw_data_list
@@ -336,7 +410,7 @@ class knnGraph_nmr(InMemoryDataset):
 
     @property
     def processed_file_names(self):
-        return '1-2-whole.pt'
+        return 'processed.pt'
     
     def download(self):
         pass
@@ -348,10 +422,10 @@ class knnGraph_nmr(InMemoryDataset):
                 x=d['x'],
                 edge_index=d['edge_index'],
                 edge_attr=d['edge_attr'],
-                y=d['y'],
+                atom_y=d['atom_y'],
                 mask=d['mask'],
-                smiles=d['smiles'],
-                ids=d['id']
+                Z=d['Z'],
+                N=d['N']      
                 ) for d in raw_data_list
         ]
 
@@ -513,7 +587,7 @@ class knnGraph_multi(InMemoryDataset):
 
     @property
     def processed_file_names(self):
-        return '1-2-whole.pt'
+        return 'processed.pt'
     
     def download(self):
         pass
@@ -525,11 +599,14 @@ class knnGraph_multi(InMemoryDataset):
                 x=d['x'],
                 edge_index=d['edge_index'],
                 edge_attr=d['edge_attr'],
-                y=d['y0'],
-                y1=d['y1'],
-                y2=d['y2'],
-                ids=d['id'],
-                smiles=d['smiles']
+                mol_gas=d['mol_gas'],
+                mol_wat=d['mol_wat'],
+                mol_oct=d['mol_oct'],
+                mol_sol_wat=d['mol_sol_wat'],
+                mol_sol_oct=d['mol_sol_oct'],
+                mol_logp=d['mol_sol_logp'],
+                N=d['N'],
+                Z=d['Z']
                 ) for d in raw_data_list
         ]
 
@@ -542,6 +619,52 @@ class knnGraph_multi(InMemoryDataset):
         data, slices = self.collate(data_list)
         torch.save((data, slices), self.processed_paths[0])
 #------------------MultiTask--------------------------------------
+
+#------------------SingleTask--------------------------------------
+class knnGraph_single(InMemoryDataset):
+    def __init__(self,
+                 root,
+                 transform=None,
+                 pre_transform=None,
+                 pre_filter=None):
+        super(knnGraph_single, self).__init__(root, transform, pre_transform, pre_filter)
+        self.type = type
+        self.data, self.slices = torch.load(self.processed_paths[0])
+
+    @property
+    def raw_file_names(self):
+        return 'temp.pt'
+
+    @property
+    def processed_file_names(self):
+        return 'processed.pt'
+    
+    def download(self):
+        pass
+
+    def process(self):
+        raw_data_list = torch.load(self.raw_paths[0])
+        data_list = [
+            Data(
+                x=d['x'],
+                edge_index=d['edge_index'],
+                edge_attr=d['edge_attr'],
+                mol_sol_wat=d['mol_sol_wat'],
+                N=d['N'],
+                Z=d['Z']
+                ) for d in raw_data_list
+        ]
+
+        if self.pre_filter is not None:
+            data_list = [data for data in data_list if self.pre_filter(data)]
+
+        if self.pre_transform is not None:
+            data_list = [self.pre_transform(data) for data in data_list]
+
+        data, slices = self.collate(data_list)
+        torch.save((data, slices), self.processed_paths[0])
+#------------------SingleTask--------------------------------------
+
 
 #------------------EFGS-------------------------------------------
 class knnGraph_EFGS(InMemoryDataset):
@@ -679,13 +802,11 @@ class knnGraph_WithWater(InMemoryDataset):
                 x=solute['x'],
                 edge_index=solute['edge_index'],
                 edge_attr=solute['edge_attr'],
-                y=solute['y'],
-                ids=solute['id'],
+                mol_y=solute['y'],
                 hyd_solute_x=hyd_solute['x'],
                 hyd_solute_edge_index=hyd_solute['edge_index'],
                 hyd_solute_edge_attr=hyd_solute['edge_attr'],
-                hyd_solute_mask=hyd_solute['mask'],
-                smiles=d['smiles']
+                hyd_solute_mask=hyd_solute['mask']
 
                 ) for solute, hyd_solute in zip(raw_solute_data, raw_hydrated_solute_data)
         ]

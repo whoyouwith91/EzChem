@@ -34,7 +34,6 @@ def get_parser():
     parser.add_argument('--model', type=str, default="1-GNN")
     parser.add_argument('--EFGS', action='store_true')
     parser.add_argument('--twoHop', action='store_true')
-    parser.add_argument('--normalize', action='store_true')
     parser.add_argument('--mol_features', action='store_true')
     parser.add_argument('--residual_connect', action='store_true')
     parser.add_argument('--interaction_simpler', action='store_true')
@@ -48,18 +47,20 @@ def get_parser():
     parser.add_argument('--mask', action='store_true') # for nmr type; 
     parser.add_argument('--train_type', type=str, default='from_scratch', choices=['from_scratch', 'transfer', 'hpsearch', 'finetuning'])
     parser.add_argument('--preTrainedPath', type=str)
+    parser.add_argument('--propertyLevel', type=str, default='molecule')
     parser.add_argument('--test_level', type=str, default='molecule')
     parser.add_argument('--OnlyPrediction', action='store_true')
-    parser.add_argument('--loss', type=str, choices=['l1', 'l2', 'smooth_l1', 'dropout', 'vae', 'unsuper', 'maskedL2', 'class'])
+    parser.add_argument('--loss', type=str, choices=['l1', 'l2', 'smooth_l1', 'dropout', 'vae', 'unsuper', 'maskedL1', 'maskedL2', 'class'])
     parser.add_argument('--metrics', type=str, choices=['l1', 'l2', 'class'])
     parser.add_argument('--weights', type=str, choices=['he_norm', 'xavier_norm', 'he_uni', 'xavier_uni'], default='he_uni')
+    parser.add_argument('--clip', action='store_true') # clip weights or not
+    parser.add_argument('--normalize', action='store_true')
     parser.add_argument('--act_fn', type=str, default='relu')
-    parser.add_argument('--optimizer',  type=str, choices=['adam', 'sgd', 'swa', 'EMA'])
+    parser.add_argument('--optimizer',  type=str, choices=['adam', 'sgd', 'swa', 'EMA', 'adamW', 'SWA'])
     parser.add_argument('--style', type=str, choices=['base', 'CV', 'preTraining'])  # if running CV
     parser.add_argument('--early_stopping', action='store_true')
     parser.add_argument('--experiment', type=str)  # when doing experimenting, name it. 
     parser.add_argument('--num_tasks', type=int, default=1)
-    parser.add_argument('--propertyLevel', type=str, default='molecule')
     parser.add_argument('--gradCam', action='store_true')
     parser.add_argument('--tsne', action='store_true')
     parser.add_argument('--uncertainty',  action='store_true')

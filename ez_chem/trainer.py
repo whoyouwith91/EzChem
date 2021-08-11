@@ -72,48 +72,76 @@ def train(model, optimizer, dataloader, config, scheduler=None):
     for data in dataloader:
         data = data.to(config['device'])
         optimizer.zero_grad()
-        y0, y1 = model(data) # y0: atom, y1: molecule
-        if config['taskType'] == 'single' and config['propertyLevel'] == 'molecule':
-            if config['dataset'] == 'solNMR':
-                loss = get_loss_fn(config['loss'])(y1, data.mol_y)
-            else:
-                loss = get_loss_fn(config['loss'])(y1, data.mol_y)
-            all_loss += loss.item() * data.num_graphs
-        elif config['taskType'] == 'multi' and config['dataset'] == 'calcSolLogP/ALL':
-            loss = get_loss_fn(config['loss'])(y1[:,0], data.y) + get_loss_fn(config['loss'])(y1[:,1], data.y1) + get_loss_fn(config['loss'])(y1[:,2], data.y2)
-            all_loss += loss.item() * data.num_graphs
-        elif config['propertyLevel'] == 'atomMol':
-            if config['dataset'] == 'solNMR':
-                #loss = get_loss_fn(config['loss'])(y0, data.atom_y) + get_loss_fn(config['loss'])(y1, data.mol_y)
-                #all_loss += loss.item() * data.num_graphs
-                loss = get_loss_fn(config['loss'])(y0, data.atom_y) + get_loss_fn(config['loss'])(y1, data.mol_y)
-            if config['dataset'] == 'solEFGs':
-                loss = get_loss_fn(config['atom_loss'])(y0, data.atom_y) + get_loss_fn(config['mol_loss'])(y1, data.mol_y)
-        elif config['propertyLevel'] == 'atom':
-            if config['dataset'] == 'solNMR':
-                loss = get_loss_fn(config['loss'])(data.atom_y, y0)
+        y = model(data) # y contains different outputs depending on the # of tasks
+        
+        if config['dataset'] in ['solNMR', 'solALogP', 'qm9/nmr/allAtoms']:
+            if config['propertyLevel'] == 'molecule': # single task on regression
+                assert config['taskType'] == 'single'
+                loss = get_loss_fn(config['loss'])(y[1], data.mol_sol_wat)
+                all_loss += loss.item() * data.num_graphs
+            elif config['propertyLevel'] == 'atom': # 
+                assert config['taskType'] == 'single'
+                loss = get_loss_fn(config['loss'])(data.atom_y, y[0])
                 all_loss += loss.item() * data.N.sum()
                 all_atoms += data.N.sum()
-            elif config['dataset'] == 'solEFGs':
-                loss = get_loss_fn(config['loss'])(y0, data.atom_y)
+            elif config['propertyLevel'] == 'multiMol':
+                assert config['taskType'] == 'multi'
+                loss = get_loss_fn(config['loss'])(y[0], data.mol_gas) + \
+                       get_loss_fn(config['loss'])(y[1], data.mol_wat) + \
+                       get_loss_fn(config['loss'])(y[2], data.mol_oct) + \
+                       get_loss_fn(config['loss'])(y[3], data.mol_sol_wat) + \
+                       get_loss_fn(config['loss'])(y[4], data.mol_sol_oct)
+                       #get_loss_fn(config['loss'])(y[5], data.mol_logp)
+            elif config['propertyLevel'] == 'atomMultiMol':
+                assert config['taskType'] == 'multi'
+                loss = get_loss_fn(config['loss'])(y[0], data.atom_y) + \
+                       get_loss_fn(config['loss'])(y[1], data.mol_gas) + \
+                       get_loss_fn(config['loss'])(y[2], data.mol_wat) + \
+                       get_loss_fn(config['loss'])(y[3], data.mol_oct) + \
+                       get_loss_fn(config['loss'])(y[4], data.mol_sol_wat) + \
+                       get_loss_fn(config['loss'])(y[5], data.mol_sol_oct) + \
+                       get_loss_fn(config['loss'])(y[6], data.mol_logp)
+            elif config['propertyLevel'] == 'atomMol':
+                assert config['taskType'] == 'multi'
+                loss = get_loss_fn(config['loss'])(y[0], data.atom_y) + get_loss_fn(config['loss'])(y[1], data.mol_sol_wat)
+            else:
+                 raise "LossError"
+        
+        elif config['dataset'] == 'solEFGs': # solvation for regression and EFGs labels for classification 
+            if config['propertyLevel'] == 'atomMol':
+                assert config['taskType'] == 'multi'
+                loss = get_loss_fn(config['atom_loss'])(y[0], data.atom_y) + get_loss_fn(config['mol_loss'])(y[1], data.mol_sol_wat)
+            elif config['propertyLevel'] == 'atom':
+                assert config['taskType'] == 'single'
+                loss = get_loss_fn(config['loss'])(y[0], data.atom_y)
                 idx = F.log_softmax(model(data)[0], 1).argmax(dim=1)
                 preds.append(idx.detach().data.cpu().numpy())
                 labels.append(data['atom_y'].detach().data.cpu().numpy())
             else:
-                loss = get_loss_fn(config['loss'])(data.y, y0, data.mask)
+                raise "LossError"
+        
+        else: 
+            if config['propertyLevel'] == 'molecule': # for single task, like exp solvation, solubility, ect
+                assert config['taskType'] == 'single'
+                loss = get_loss_fn(config['loss'])(y[1], data.mol_y)
+                all_loss += loss.item() * data.num_graphs
+            elif config['propertyLevel'] == 'atom': # Exp nmr/carbon, nmr/hydrogen
+                assert config['taskType'] == 'single'
+                loss = get_loss_fn(config['loss'])(data.atom_y, y[0], data.mask)
                 all_atoms += data.mask.sum()
                 all_loss += loss.item() * data.mask.sum()
-        elif config['dataset'] == 'solEFGs':
-            loss = get_loss_fn(config['loss'])(data.atom_y, y0)
-        else:
-            raise "LossError"
+            else:
+                raise "LossError"
  
         loss.backward()
-        if config['optimizer'] in ['sgd']:
+        if config['clip']:
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.)
         optimizer.step()
         if config['scheduler'] == 'NoamLR':
-             scheduler.step()
+            scheduler.step()
+    if config['optimizer'] in ['SWA']:
+        optimizer.swap_swa_sgd()
+    
     if config['propertyLevel'] == 'atom':
         if config['dataset'] == 'solEFGs':
             return loss.item(), get_metrics_fn(config['metrics'])(np.hstack(labels), np.hstack(preds))
@@ -124,7 +152,7 @@ def train(model, optimizer, dataloader, config, scheduler=None):
             return np.sqrt(all_loss / len(dataloader.dataset)) # RMSE
         else:
             return all_loss / len(dataloader.dataset) # MAE
-    if config['propertyLevel'] == 'atomMol':
+    if config['propertyLevel'] in ['atomMol', 'multiMol', 'atomMultiMol']:
         return loss.item()
 
 def test(model, dataloader, config):
@@ -133,56 +161,59 @@ def test(model, dataloader, config):
     '''
     model.eval()
     error = 0
-    if config['propertyLevel'] == 'atom' or config['test_level'] == 'atom':
+    if config['test_level'] == 'atom':
         total_N = 0
     if config['dataset'] == 'solEFGs':
         preds, labels = [], []
     with torch.no_grad():
         for data in dataloader:
             data = data.to(config['device'])
-            if config['taskType'] == 'single' and config['propertyLevel'] == 'molecule':
-                if config['dataset'] == 'solNMR':
-                    error += get_metrics_fn(config['metrics'])(model(data)[1], data.mol_y) * data.num_graphs
-                else:
-                    error += get_metrics_fn(config['metrics'])(model(data)[1], data.mol_y) * data.num_graphs
-            elif config['taskType'] == 'multi' and config['dataset'] == 'calcSolLogP/ALL':
-                y0, _ = model(data)
-                #error += (get_metrics_fn(config['loss'])(y0[:,0], data.y) + get_metrics_fn(config['loss'])(y0[:,1], data.y1) + get_metrics_fn(config['loss'])(y0[:,2], data.y2))*data.num_graphs
-                error += get_metrics_fn(config['metrics'])(y0[:,0], data.y) * data.num_graphs
-            elif config['propertyLevel'] == 'atom':
-                if config['dataset'] == 'solNMR':
+            y = model(data)
+
+            if config['dataset'] in ['solNMR', 'solALogP', 'qm9/nmr/allAtoms']:
+                if config['test_level'] == 'molecule': # the metrics on single task, currently on solvation energy only
+                    if config['propertyLevel'] == 'multiMol':
+                        pred = y[3]
+                    elif config['propertyLevel'] in ['molecule', 'atomMol']:
+                        pred = y[1]
+                    error += get_metrics_fn(config['metrics'])(pred, data.mol_sol_wat) * data.num_graphs
+                elif config['test_level'] == 'atom': #
                     total_N += data.N.sum().item()
-                    error += get_metrics_fn(config['metrics'])(model(data)[0], data.atom_y)*data.N.sum().item()
-                elif config['dataset'] == 'solEFGs':
-                    idx = F.log_softmax(model(data)[0], 1).argmax(dim=1)
+                    error += get_metrics_fn(config['metrics'])(y[0], data.atom_y)*data.N.sum().item()
+                else:
+                    raise "MetricsError"
+            
+            elif config['dataset'] == 'solEFGs':
+                if config['test_level'] == 'molecule': # the metrics on single task, currently on solvation energy only
+                    error += get_metrics_fn(config['metrics'])(y[1], data.mol_sol_wat) * data.num_graphs
+                elif config['test_level'] == 'atom': #
+                    idx = F.log_softmax(y[0], 1).argmax(dim=1)
                     #_, idx = torch.max(model(data)[0], 1)
                     preds.append(idx.detach().data.cpu().numpy())
                     labels.append(data['atom_y'].detach().data.cpu().numpy())
                 else:
-                    total_N += data.mask.sum().item()
-                    error += get_metrics_fn(config['metrics'])(model(data)[0][data.mask>0].reshape(-1,1), data.y[data.mask>0].reshape(-1,1))*data.mask.sum().item()
-            elif config['propertyLevel'] == 'atomMol':
-                y0, y1 = model(data)
+                    raise "MetricsError"
+
+            else: 
                 if config['test_level'] == 'molecule':
-                    error += get_metrics_fn(config['metrics'])(y1, data.mol_y) * data.num_graphs
-                if config['test_level'] == 'atom':
-                    total_N += data.N.sum().item()
-                    error += get_metrics_fn(config['metrics'])(y0, data.atom_y)*data.N.sum().item()
-            else:
-                raise "MetricsError"
-       
-        if config['dataset'] in ['qm9/u0']:
-            return error.item() / len(dataloader.dataset) # MAE
-        elif config['propertyLevel'] == 'atom' and config['dataset'] in ['nmr/hydrogen', 'nmr/carbon', 'qm9/nmr/carbon', 'qm9/nmr/hydrogen', 'qm9/nmr/allAtoms', 'qm9/nmr/carbon/smaller', 'solNMR']:
-            return error.item() / total_N # MAE
-        elif config['metrics'] == 'l2':
-            return np.sqrt(error.item() / len(dataloader.dataset)) # RMSE for ws, logp, mp, etc.
-        elif config['metrics'] == 'l1':
+                    error += get_metrics_fn(config['metrics'])(y[1], data.mol_y) * data.num_graphs
+                elif config['test_level'] == 'atom': # nmr/carbon hydrogen
+                    total_N += data.mask.sum().item()
+                    error += get_metrics_fn(config['metrics'])(y[0][data.mask>0].reshape(-1,1), data.atom_y[data.mask>0].reshape(-1,1))*data.mask.sum().item()
+                else:
+                    raise "MetricsError"
+
+        if config['metrics'] == 'l2':
+            assert config['test_level'] == 'molecule'
+            return np.sqrt(error.item() / len(dataloader.dataset)) # RMSE for mol level properties.
+        if config['metrics'] == 'l1':
             if config['test_level'] == 'atom':
                 return error.item() / total_N # MAE
+            elif config['propertyLevel'] in ['multiMol', 'atomMol']:
+                return error.item() / len(dataloader.dataset) * 23 # ev --> kcal/mol
             else:
                 return error.item() / len(dataloader.dataset) 
-        elif config['metrics'] == 'class':
+        if config['metrics'] == 'class':
             return get_metrics_fn(config['metrics'])(np.hstack(labels), np.hstack(preds))
 
 def train_dropout(model, optimizer, dataloader, config):

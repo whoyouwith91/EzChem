@@ -86,7 +86,7 @@ class get_data_loader():
          val_loader = DataLoader_WithWater(val_dataset, batch_size=self.config['batch_size'], num_workers=0)
          train_loader = DataLoader_WithWater(train_dataset, batch_size=self.config['batch_size'], num_workers=0, shuffle=True)
 
-         return train_loader,  val_loader, test_loader, None, num_features, num_bond_features, None
+         return train_loader,  val_loader, test_loader, num_features, num_bond_features, None
 
       elif self.config['model'] in ['physnet']:
          #if self.config['dataset'] == 'qm9':
@@ -94,20 +94,23 @@ class get_data_loader():
          #dataset = DummyIMDataset(root=self.config['data_path'], dataset_name='processed.pt')
          num_i_2 = None
       else: # 1-GNN
-         if self.config['dataset'] == 'calcSolLogP/ALL':
-            dataset = knnGraph_multi(root=self.config['data_path'])
-         elif self.config['dataset'] in ['qm9/nmr/carbon', 'qm9/nmr/carbon/smaller', 'qm9/nmr/hydrogen', 'qm9/nmr/allAtoms', 'nmr/hydrogen', 'nmr/carbon']:
+         if self.config['dataset'] in ['solNMR', 'solALogP']:
+            if self.config['propertyLevel'] == 'multiMol': # for multiple mol properties
+               dataset = knnGraph_multi(root=self.config['data_path'])
+            if self.config['propertyLevel'] == 'molecule': # naive, only with solvation property
+               dataset = knnGraph_single(root=self.config['data_path'])
+            if self.config['propertyLevel'] in ['atom', 'atomMol']: #  either for atom property only or atom/mol property 
+               dataset = knnGraph_atom(root=self.config['data_path'])
+            num_i_2 = None
+         elif self.config['dataset'] in ['qm9/nmr/carbon', 'qm9/nmr/carbon/smaller', 'qm9/nmr/hydrogen', 'nmr/hydrogen', 'nmr/carbon']:
             dataset = knnGraph_nmr(root=self.config['data_path'])
+            num_i_2 = None
          elif self.config['mol_features']:
-            dataset = knnGraph_mol(root=self.config['data_path'])
-            num_i_2 = None
-         elif self.config['dataset'] == 'solNMR':
-            dataset = knnGraph_solNMR(root=self.config['data_path'])
-            num_i_2 = None
+            pass
          elif self.config['dataset'] == 'solEFGs':
             dataset = knnGraph_solEFGs(root=self.config['data_path'])
             num_i_2 = None
-         else:
+         else: # for typical other datasets
             dataset = knnGraph(root=self.config['data_path'])
             num_i_2 = None
       
@@ -118,10 +121,16 @@ class get_data_loader():
          num_bond_features = 0
           
       my_split_ratio = [self.train_size, self.val_size]  #my dataseet
-      
-      test_dataset = dataset[my_split_ratio[0]+my_split_ratio[1]:]
-      rest_dataset = dataset[:my_split_ratio[0]+my_split_ratio[1]]
-      train_dataset, val_dataset = rest_dataset[:my_split_ratio[0]], rest_dataset[my_split_ratio[0]:]
+      if self.config['explicit_split']:
+         #mean, std = dataset[self.train_index].data.mol_y.mean(), dataset[self.train_index].data.mol_y.std()
+         #dataset.data.mol_y = (dataset.data.mol_y - mean) / std
+         test_dataset = dataset[self.test_index]
+         val_dataset = dataset[self.valid_index]
+         train_dataset = dataset[self.train_index]
+      else:
+         test_dataset = dataset[my_split_ratio[0]+my_split_ratio[1]:]
+         rest_dataset = dataset[:my_split_ratio[0]+my_split_ratio[1]]
+         train_dataset, val_dataset = rest_dataset[:my_split_ratio[0]], rest_dataset[my_split_ratio[0]:]
 
       if self.config['model'] in ['physnet']:
          if self.config['explicit_split']:

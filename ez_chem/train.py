@@ -37,10 +37,20 @@ def main():
     if args.dataset == 'calcSolLogP/ALL':
        this_dic['taskType'] = 'multi'
        args.num_tasks = 3
-    if args.dataset == 'solNMR' and args.propertyLevel == 'atomMol':
-        args.num_tasks = 2
-        this_dic['taskType'] = 'multi'
-    if args.dataset == 'solEFGs':
+    elif args.dataset in ['solNMR', 'solALogP', 'qm9/nmr/allAtoms']:
+        if args.propertyLevel == 'atomMol':
+            args.num_tasks = 2
+            this_dic['taskType'] = 'multi'  
+        elif args.propertyLevel == 'multiMol':
+            args.num_tasks = 3
+            this_dic['taskType'] = 'multi'
+        elif args.propertyLevel == 'atomMultiMol':
+            args.num_tasks = 4
+            this_dic['taskType'] = 'multi'
+        else:
+            args.num_tasks = 1
+            this_dic['taskType'] = 'single' 
+    elif args.dataset == 'solEFGs':
         if args.propertyLevel == 'atomMol':
             args.num_tasks = 883
             this_dic['taskType'] = 'multi'
@@ -59,58 +69,33 @@ def main():
         args.dataset = args.dataset+'/COMPLETE'
     this_dic['train_size'], this_dic['val_size'] = int(dataSizes[args.dataset]['train_size']), int(dataSizes[args.dataset]['val_size'])
 
-    # load processed data 
+    # ------------------------------------load processed data-----------------------------------------------------------------------------
     loader = get_data_loader(this_dic)
     train_loader, val_loader, test_loader, num_atom_features, num_bond_features, num_i_2 = loader.train_loader, loader.val_loader, loader.test_loader, loader.num_features, loader.num_bond_features, loader.num_i_2
     this_dic['num_atom_features'], this_dic['num_bond_features'], this_dic['num_i_2'] = int(num_atom_features), num_bond_features, num_i_2
     this_dic['train_size'], this_dic['val_size'], this_dic['test_size'] = len(train_loader.dataset), len(val_loader.dataset), len(test_loader.dataset)
-    if args.model in ['physnet'] or args.dataset == 'solNMR':
-        if args.dataset in ['qm9/nmr/allAtoms']: # loading physnet params
-            energy_shift = torch.tensor([67.2858])
-            energy_scale = torch.tensor([85.8406])
-        if args.dataset in ['qm9/nmr/carbon']: # loading physnet params
-            energy_shift = torch.tensor([115.9782138561384])
-            energy_scale = torch.tensor([51.569003335315905])
-        if args.dataset in ['qm9/nmr/hydrogen']: # loading physnet params
-            energy_shift = torch.tensor([29.08285732440852])
-            energy_scale = torch.tensor([1.9575037908857158])
-        if args.dataset in ['qm9/u0']:
-            energy_shift = torch.tensor([-4.1164152221029555])
-            energy_scale = torch.tensor([0.9008408776783313])
-        if args.dataset in ['nmr/carbon']:
-            energy_shift = torch.tensor([98.23850877956372])
-            energy_scale = torch.tensor([51.27542605786456])
-        if args.dataset in ['nmr/hydrogen']:
-            energy_shift = torch.tensor([4.707991621093338])
-            energy_scale = torch.tensor([2.6513451307981577])
-        if args.dataset in ['solNMR']:
-            if args.test_level == 'molecule':
-                energy_shift = torch.tensor([-7.3204])
-                energy_scale = torch.tensor([4.7854])
-            if args.test_level == 'atom':
-                energy_shift = torch.tensor([75.4205])
-                energy_scale = torch.tensor([151.0311])
-
-        this_dic['energy_shift'], this_dic['energy_shift_value'] = energy_shift, energy_shift.item()
-        this_dic['energy_scale'], this_dic['energy_scale_value'] = energy_scale, energy_scale.item()
+    
+    # use scale and shift
+    if args.normalize: 
+        this_dic = getScaleandShift(this_dic)
 
     # for special cases 
     if args.EFGS:
         this_dic['efgs_lenth'] = len(vocab)
     
-    # loading model
+    #-----------------------------------loading model------------------------------------------------------------------------------------
     if args.model in ['physnet']: # loading physnet params
         this_dic['n_feature'] = this_dic['emb_dim']
         this_dic = {**this_dic, **physnet_kwargs}
     if this_dic['gnn_type'] == 'pnaconv':
-        this_dic['deg'] = getDegreeforPNA(train_loader)
+        this_dic['deg'], this_dic['deg_value'] = getDegreeforPNA(train_loader)
 
     model = get_model(this_dic)
     # model weights initializations
     if this_dic['train_type'] == 'from_scratch' and this_dic['model'] not in ['physnet']: 
         model = init_weights(model, this_dic)
     if this_dic['train_type'] in ['finetuning', 'transfer']:
-        if args.model in ['physnet']:
+        if args.normalize:
             state_dict = torch.load(os.path.join(args.preTrainedPath, 'best_model', 'model_best.pt'))
             state_dict.update({key:value for key,value in model.state_dict().items() if key in ['scale', 'shift']})
             model.load_state_dict(state_dict)
@@ -128,7 +113,7 @@ def main():
     # save out all input parameters 
     saveConfig(this_dic, name='config.json')
     
-    # training parts
+    # ----------------------------------------training parts----------------------------------------------------------------------------
     if args.model in ['physnet']: 
         model_ = model.type(floating_type).to(device)
     else:
@@ -187,8 +172,8 @@ def main():
                 contents = [epoch, round(time_toc-time_tic, 2), round(lr,7), round(train_error[0],3), round(train_error[1],3),  \
                 round(val_error,3), round(test_error,3), round(param_norm(model_),2), round(grad_norm(model_),2)]
             else:
-                contents = [epoch, round(time_toc-time_tic, 2), round(lr,7), round(train_error,3),  \
-                round(val_error,3), round(test_error,3), round(param_norm(model_),2), round(grad_norm(model_),2)]
+                contents = [epoch, round(time_toc-time_tic, 2), round(lr,7), round(train_error,6),  \
+                round(val_error,6), round(test_error,6), round(param_norm(model_),2), round(grad_norm(model_),2)]
             results.add_row(contents) # updating pretty table 
             saveToResultsFile(results, this_dic, name='data.txt') # save instant data to directory
             if args.optimizer == 'EMA':

@@ -99,15 +99,9 @@ def get_atom_features(atom):
            [1 if atom.IsInRingSize(9) else 0] + \
            [1 if atom.IsInRingSize(10) else 0] + \
            [1 if atom.IsInRingSize(11) else 0] + \
-           [1 if atom.IsInRingSize(12) else 0] + \
-           [1 if atom.IsInRingSize(13) else 0] + \
-           [1 if atom.IsInRingSize(14) else 0] + \
-           [1 if atom.IsInRingSize(15) else 0] + \
-           [1 if atom.IsInRingSize(16) else 0] + \
-           [1 if atom.IsInRingSize(17) else 0] + \
-           [1 if atom.IsInRingSize(18) else 0] + \
-           [1 if atom.IsInRingSize(19) else 0] + \
-           [1 if atom.IsInRingSize(20) else 0]
+           [1 if atom.IsInRingSize(12) else 0] 
+    if atom.IsInRingSize(13) or atom.IsInRingSize(14) or atom.IsInRingSize(15) or atom.IsInRingSize(16) or atom.IsInRingSize(17) or atom.IsInRingSize(18) or atom.IsInRingSize(19) or atom.IsInRingSize(20): features + [1] 
+    else: features + [0]
                
 
     return features
@@ -131,25 +125,7 @@ def get_bond_features(bond):
             bt == Chem.rdchem.BondType.AROMATIC,
             (bond.GetIsConjugated() if bt is not None else 0),
              (bond.IsInRing() if bt is not None else 0)
-         ] + \
-           [1 if bond.IsInRingSize(3) else 0] + \
-           [1 if bond.IsInRingSize(4) else 0] + \
-           [1 if bond.IsInRingSize(5) else 0] + \
-           [1 if bond.IsInRingSize(6) else 0] + \
-           [1 if bond.IsInRingSize(7) else 0] + \
-           [1 if bond.IsInRingSize(8) else 0] + \
-           [1 if bond.IsInRingSize(9) else 0] + \
-           [1 if bond.IsInRingSize(10) else 0] + \
-           [1 if bond.IsInRingSize(11) else 0] + \
-           [1 if bond.IsInRingSize(12) else 0] + \
-           [1 if bond.IsInRingSize(13) else 0] + \
-           [1 if bond.IsInRingSize(14) else 0] + \
-           [1 if bond.IsInRingSize(15) else 0] + \
-           [1 if bond.IsInRingSize(16) else 0] + \
-           [1 if bond.IsInRingSize(17) else 0] + \
-           [1 if bond.IsInRingSize(18) else 0] + \
-           [1 if bond.IsInRingSize(19) else 0] + \
-           [1 if bond.IsInRingSize(20) else 0]
+         ] 
     return fbond
 
 #def get_bond_features(bond):
