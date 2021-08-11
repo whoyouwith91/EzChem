@@ -216,7 +216,7 @@ class ResidualLayer(nn.Module):
         if self.batch_norm:
             self.bn2 = nn.BatchNorm1d(dim, momentum=1.)
 
-    def forward(self, module_type, x,  edge_index=None, edge_attr=None):
+    def forward(self, module_type, x, edge_index=None, edge_attr=None):
         ### in order of Skip >> BN >> ReLU
         if module_type == 'linear': 
             x_res = self.module(x)
