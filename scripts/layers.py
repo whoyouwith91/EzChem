@@ -150,9 +150,27 @@ class LayerNorm(nn.Module):
         std = x.std(-1, keepdim=True)
         return self.a_2 * (x - mean) / (std + self.eps) + self.b_2
 
+def dmpnn_pool(atom_hiddens, a_scope):
+    mol_vecs = []
+    for i, (a_start, a_size) in enumerate(a_scope):
+        if a_size == 0:
+            cached_zero_vector = nn.Parameter(torch.zeros(atom_hiddens.shape[-1]), requires_grad=False)
+            mol_vecs.append(cached_zero_vector)
+        else:
+            cur_hiddens = atom_hiddens.narrow(0, a_start, a_size)
+            mol_vec = cur_hiddens  # (num_atoms, hidden_size)
+            mol_vec = mol_vec.sum(dim=0)
+            mol_vecs.append(mol_vec)
+
+    mol_vecs = torch.stack(mol_vecs, dim=0)  # (num_molecules, hidden_size)
+
+    return mol_vecs  # num_molecules x hidden
+
 def PoolingFN(config):
     #Different kind of graph pooling
-    if config['pooling'] == "sum":
+    if config['gnn_type'] == 'dmpnn':
+        pool = dmpnn_pool
+    elif config['pooling'] == "sum":
         pool = global_add_pool
     elif config['pooling'] == "mean":
         pool = global_mean_pool

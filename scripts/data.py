@@ -5,6 +5,7 @@ from DataPrepareUtils import my_pre_transform
 from utils_functions import collate_fn # sPhysnet
 import torch
 
+
 class get_split_data():
    def __init__(self, config):
       super(get_split_data)
@@ -94,11 +95,14 @@ class get_data_loader():
          #dataset = DummyIMDataset(root=self.config['data_path'], dataset_name='processed.pt')
          num_i_2 = None
       else: # 1-GNN
-         if self.config['dataset'] in ['solNMR', 'solALogP']:
+         if self.config['dataset'] in ['solNMR', 'solALogP', 'sol_calc/ALL/smaller', 'sol_calc/ALL/smaller_18W', 'sol_calc/ALL/smaller_28W', 'sol_calc/ALL/smaller_38W', 'sol_calc/ALL/smaller_48W', 'sol_calc/ALL/smaller_58W']:
             if self.config['propertyLevel'] == 'multiMol': # for multiple mol properties
                dataset = knnGraph_multi(root=self.config['data_path'])
             if self.config['propertyLevel'] == 'molecule': # naive, only with solvation property
-               dataset = knnGraph_single(root=self.config['data_path'])
+               if self.config['gnn_type'] == 'dmpnn':
+                  dataset = knnGraph_dmpnn(root=self.config['data_path'])
+               else:
+                  dataset = knnGraph_single(root=self.config['data_path'])
             if self.config['propertyLevel'] in ['atom', 'atomMol']: #  either for atom property only or atom/mol property 
                dataset = knnGraph_atom(root=self.config['data_path'])
             num_i_2 = None
@@ -111,8 +115,12 @@ class get_data_loader():
             dataset = knnGraph_solEFGs(root=self.config['data_path'])
             num_i_2 = None
          else: # for typical other datasets
-            dataset = knnGraph(root=self.config['data_path'])
-            num_i_2 = None
+            if self.config['gnn_type'] == 'dmpnn':
+               dataset = knnGraph_dmpnn_exp(root=self.config['data_path'])
+               num_i_2 = None
+            else:
+               dataset = knnGraph(root=self.config['data_path'])
+               num_i_2 = None
       
       num_features = dataset.num_features
       if self.config['model'] not in ['physnet']:
@@ -142,10 +150,15 @@ class get_data_loader():
             val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=self.config['batch_size'], num_workers=0, collate_fn=collate_fn)
             train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=self.config['batch_size'], num_workers=0, shuffle=True, collate_fn=collate_fn)
       else:
-         test_loader = DataLoader(test_dataset, batch_size=self.config['batch_size'], num_workers=0)
-         val_loader = DataLoader(val_dataset, batch_size=self.config['batch_size'], num_workers=0)
-         train_loader = DataLoader(train_dataset, batch_size=self.config['batch_size'], num_workers=0, shuffle=True)
-      #part_train_loader = DataLoader(train_dataset[:10000], batch_size=self.config['batch_size'], num_workers=0)
+         if self.config['gnn_type'] == 'dmpnn':
+            test_loader = DataLoader_dmpnn(test_dataset, batch_size=self.config['batch_size'], num_workers=0)
+            val_loader = DataLoader_dmpnn(val_dataset, batch_size=self.config['batch_size'], num_workers=0)
+            train_loader = DataLoader_dmpnn(train_dataset, batch_size=self.config['batch_size'], num_workers=0, shuffle=True)
+         else:
+            test_loader = DataLoader(test_dataset, batch_size=self.config['batch_size'], num_workers=0)
+            val_loader = DataLoader(val_dataset, batch_size=self.config['batch_size'], num_workers=0)
+            train_loader = DataLoader(train_dataset, batch_size=self.config['batch_size'], num_workers=0, shuffle=True)
+      
       return train_loader, val_loader, test_loader, num_features, num_bond_features, num_i_2
 
    def vaeLoader(self):
@@ -169,3 +182,5 @@ class get_data_loader():
    def descriptorLoader(self):
       #TODO
       pass
+
+

@@ -141,9 +141,6 @@ class MolGraph:
     - n_bonds: The number of bonds in the molecule.
     - f_atoms: A mapping from an atom index to a list atom features.
     - f_bonds: A mapping from a bond index to a list of bond features.
-    - a2b: A mapping from an atom index to a list of incoming bond indices.
-    - b2a: A mapping from a bond index to the index of the atom the bond originates from.
-    - b2revb: A mapping from a bond index to the index of the reverse bond.
     """
 
     def __init__(self, mol, periodic_features=False, model='1-GNN'):
@@ -196,3 +193,86 @@ def getAtomToEFGs(efg, word):
             atom_efgs[i] = list(word.keys()).index(efg[1][e])
     
     return list(collections.OrderedDict(sorted(atom_efgs.items())).values())
+
+class MolGraph_dmpnn:
+    """
+    A :class:`MolGraph` represents the graph structure and featurization of a single molecule.
+
+    A MolGraph computes the following attributes:
+
+    * :code:`n_atoms`: The number of atoms in the molecule.
+    * :code:`n_bonds`: The number of bonds in the molecule.
+    * :code:`f_atoms`: A mapping from an atom index to a list of atom features.
+    * :code:`f_bonds`: A mapping from a bond index to a list of bond features.
+    * :code:`a2b`: A mapping from an atom index to a list of incoming bond indices.
+    * :code:`b2a`: A mapping from a bond index to the index of the atom the bond originates from.
+    * :code:`b2revb`: A mapping from a bond index to the index of the reverse bond.
+    * :code:`overwrite_default_atom_features`: A boolean to overwrite default atom descriptors.
+    * :code:`overwrite_default_bond_features`: A boolean to overwrite default bond descriptors.
+    """
+
+    def __init__(self, mol, ACSF=False, f_atoms=None, periodic_features=False, model='1-GNN'):
+        """
+        :param mol: A SMILES or an RDKit molecule.
+        :param atom_features_extra: A list of 2D numpy array containing additional atom features to featurize the molecule
+        :param bond_features_extra: A list of 2D numpy array containing additional bond features to featurize the molecule
+        :param overwrite_default_atom_features: Boolean to overwrite default atom features by atom_features instead of concatenating
+        :param overwrite_default_bond_features: Boolean to overwrite default bond features by bond_features instead of concatenating
+        """
+        # Convert SMILES to RDKit molecule if necessary
+        if type(mol) == str:
+            mol = Chem.MolFromSmiles(mol)
+        if type(mol) == Chem.rdchem.Mol:
+            mol = mol
+        
+        self.n_atoms = 0  # number of atoms
+        self.n_bonds = 0  # number of bonds
+        self.f_atoms = []  # mapping from atom index to atom features
+        self.f_bonds = []  # mapping from bond index to concat(in_atom, bond) features
+        self.a2b = []  # mapping from atom index to incoming bond indices
+        self.b2a = []  # mapping from bond index to the index of the atom the bond is coming from
+        self.b2revb = []  # mapping from bond index to the index of the reverse bond
+        self.at_begin = []
+        self.at_end = []
+
+        if 'GNN' in model:
+            if not periodic_features:
+                if ACSF:
+                    self.f_atoms = f_atoms
+                else:
+                    self.f_atoms = [get_atom_features(atom) for atom in mol.GetAtoms()]
+            else: # use periodic table to initialize features
+                self.f_atoms = [ATOM_FEATURES_PERIODIC[atom.GetSymbol()] for atom in mol.GetAtoms()]
+            self.n_atoms = len(self.f_atoms)
+
+        # Initialize atom to bond mapping for each atom
+        for _ in range(self.n_atoms):
+            self.a2b.append([])
+
+        # Get bond features
+        for a1 in range(self.n_atoms):
+            for a2 in range(a1 + 1, self.n_atoms):
+                bond = mol.GetBondBetweenAtoms(a1, a2)
+
+                if bond is None:
+                    continue
+
+                f_bond = get_bond_features(bond)
+                self.at_begin.append(bond.GetBeginAtom().GetIdx())
+                self.at_begin.append(bond.GetEndAtom().GetIdx())
+                self.at_end.append(bond.GetEndAtom().GetIdx())
+                self.at_end.append(bond.GetBeginAtom().GetIdx())
+
+                self.f_bonds.append(self.f_atoms[a1] + f_bond)
+                self.f_bonds.append(self.f_atoms[a2] + f_bond)
+
+                # Update index mappings
+                b1 = self.n_bonds
+                b2 = b1 + 1
+                self.a2b[a2].append(b1)  # b1 = a1 --> a2
+                self.b2a.append(a1)
+                self.a2b[a1].append(b2)  # b2 = a2 --> a1
+                self.b2a.append(a2)
+                self.b2revb.append(b2)
+                self.b2revb.append(b1)
+                self.n_bonds += 2

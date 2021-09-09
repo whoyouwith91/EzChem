@@ -416,11 +416,15 @@ def getDegreeforPNA(loader):
 
 def getScaleandShift(config):
     if config['dataset'] in ['deepchem/freesol']:
-            energy_shift = torch.tensor([-0.448323499821181])
-            energy_scale = torch.tensor([0.5231881290032624])
+            #energy_shift = torch.tensor([-0.448323499821181]) # statistics over all compounds in train set before ACSF unit is kcal/mol
+            #energy_scale = torch.tensor([0.5231881290032624]) # statistics over all compounds in train set before ACSF, unit is kcal/mol
+            energy_shift = torch.tensor([-0.22380834618774426]) # statistics over all compounds in train set after ACSF, unit is kcal.mol
+            energy_scale = torch.tensor([0.2554506303590151]) # statistics over all compounds in train set after ACSF, unit is kcal.mol
     if config['dataset'] in ['deepchem/delaney']:
-            energy_shift = torch.tensor([-0.12582392787107535])
-            energy_scale = torch.tensor([0.09535901863588805])
+            #energy_shift = torch.tensor([-0.12582392787107535])
+            #energy_scale = torch.tensor([0.09535901863588805])
+            energy_shift = torch.tensor([-0.1239565706960962])
+            energy_scale = torch.tensor([0.09412915806545324])
     if config['dataset'] in ['deepchem/logp']:
             energy_shift = torch.tensor([0.04861841981877047])
             energy_scale = torch.tensor([0.03197769536926355])
@@ -445,9 +449,9 @@ def getScaleandShift(config):
     if config['dataset'] in ['nmr/hydrogen']:
             energy_shift = torch.tensor([4.6759105])
             energy_scale = torch.tensor([2.6481516])
-    if config['dataset'] in ['sol_calc/ALL']:
-            energy_shift = torch.tensor([-0.754434680278891])
-            energy_scale = torch.tensor([0.49311241777304765])
+    if config['dataset'] in ['sol_calc/ALL/smaller', 'sol_calc/ALL/smaller_18W', 'sol_calc/ALL/smaller_28W', 'sol_calc/ALL/smaller_38W', 'sol_calc/ALL/smaller_48W', 'sol_calc/ALL/smaller_58W']:
+            energy_shift = torch.tensor([-8.596711050283846]) # unit is kcal/mol
+            energy_scale = torch.tensor([5.428582987359422]) # unit is kcal/mol
     if config['dataset'] in ['solALogP', 'solNMR']:
             if config['propertyLevel'] == 'multiMol':
                 energy_shift = torch.tensor([-4.232369738478913]) # eV for smaller gas energy
@@ -475,3 +479,20 @@ def getElements(dataframe):
             element.add(c)
         #break
     return element
+
+def atom_mean_std(E, N, index):
+    """
+    calculate the mean and stand variance of Energy in the training set
+    :return:
+    """
+    mean = 0.0
+    std = 0.0
+    num = len(index)
+    for _i in range(num):
+        i = index[_i]
+        m_prev = mean
+        x = E[i] / N[i]
+        mean += (x - mean) / (i + 1)
+        std += (x - mean) * (x - m_prev)
+    std = math.sqrt(std / num)
+    return mean, std

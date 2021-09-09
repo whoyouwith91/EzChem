@@ -71,14 +71,20 @@ def train(model, optimizer, dataloader, config, scheduler=None):
         preds, labels = [], []
     for data in dataloader:
         data = data.to(config['device'])
+        #print(data.x.shape)
+        #sys.stdout.flush()
         optimizer.zero_grad()
         y = model(data) # y contains different outputs depending on the # of tasks
         
-        if config['dataset'] in ['solNMR', 'solALogP', 'qm9/nmr/allAtoms']:
+        if config['dataset'] in ['solNMR', 'solALogP', 'qm9/nmr/allAtoms', 'sol_calc/ALL/smaller', 'sol_calc/ALL/smaller_18W', 'sol_calc/ALL/smaller_28W', 'sol_calc/ALL/smaller_38W', 'sol_calc/ALL/smaller_48W', 'sol_calc/ALL/smaller_58W']:
             if config['propertyLevel'] == 'molecule': # single task on regression
                 assert config['taskType'] == 'single'
                 loss = get_loss_fn(config['loss'])(y[1], data.mol_sol_wat)
-                all_loss += loss.item() * data.num_graphs
+                if config['gnn_type'] == 'dmpnn':
+                    all_loss += loss.item() * config['batch_size']
+                else:
+                    all_loss += loss.item() * data.num_graphs
+
             elif config['propertyLevel'] == 'atom': # 
                 assert config['taskType'] == 'single'
                 loss = get_loss_fn(config['loss'])(data.atom_y, y[0])
@@ -124,7 +130,10 @@ def train(model, optimizer, dataloader, config, scheduler=None):
             if config['propertyLevel'] == 'molecule': # for single task, like exp solvation, solubility, ect
                 assert config['taskType'] == 'single'
                 loss = get_loss_fn(config['loss'])(y[1], data.mol_y)
-                all_loss += loss.item() * data.num_graphs
+                if config['gnn_type'] == 'dmpnn':
+                    all_loss += loss.item() * config['batch_size']
+                else:
+                    all_loss += loss.item() * data.num_graphs
             elif config['propertyLevel'] == 'atom': # Exp nmr/carbon, nmr/hydrogen
                 assert config['taskType'] == 'single'
                 loss = get_loss_fn(config['loss'])(data.atom_y, y[0], data.mask)
@@ -170,13 +179,16 @@ def test(model, dataloader, config):
             data = data.to(config['device'])
             y = model(data)
 
-            if config['dataset'] in ['solNMR', 'solALogP', 'qm9/nmr/allAtoms']:
+            if config['dataset'] in ['solNMR', 'solALogP', 'qm9/nmr/allAtoms', 'sol_calc/ALL/smaller', 'sol_calc/ALL/smaller_18W', 'sol_calc/ALL/smaller_28W', 'sol_calc/ALL/smaller_38W', 'sol_calc/ALL/smaller_48W', 'sol_calc/ALL/smaller_58W']:
                 if config['test_level'] == 'molecule': # the metrics on single task, currently on solvation energy only
                     if config['propertyLevel'] == 'multiMol':
                         pred = y[3]
                     elif config['propertyLevel'] in ['molecule', 'atomMol']:
                         pred = y[1]
-                    error += get_metrics_fn(config['metrics'])(pred, data.mol_sol_wat) * data.num_graphs
+                    if config['gnn_type'] == 'dmpnn':
+                        error += get_metrics_fn(config['metrics'])(pred, data.mol_sol_wat) * config['batch_size']
+                    else:
+                        error += get_metrics_fn(config['metrics'])(pred, data.mol_sol_wat) * data.num_graphs
                 elif config['test_level'] == 'atom': #
                     total_N += data.N.sum().item()
                     error += get_metrics_fn(config['metrics'])(y[0], data.atom_y)*data.N.sum().item()
@@ -196,7 +208,10 @@ def test(model, dataloader, config):
 
             else: 
                 if config['test_level'] == 'molecule':
-                    error += get_metrics_fn(config['metrics'])(y[1], data.mol_y) * data.num_graphs
+                    if config['gnn_type'] == 'dmpnn':
+                        error += get_metrics_fn(config['metrics'])(y[1], data.mol_y) * config['batch_size']
+                    else:
+                        error += get_metrics_fn(config['metrics'])(y[1], data.mol_y) * data.num_graphs
                 elif config['test_level'] == 'atom': # nmr/carbon hydrogen
                     total_N += data.mask.sum().item()
                     error += get_metrics_fn(config['metrics'])(y[0][data.mask>0].reshape(-1,1), data.atom_y[data.mask>0].reshape(-1,1))*data.mask.sum().item()

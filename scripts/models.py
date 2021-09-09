@@ -11,6 +11,7 @@ from layers import *
 from gnns import *
 from PhysDimeNet import PhysDimeNet
 from torch_geometric.nn.norm import PairNorm
+import time, sys
 
 def get_model(config):
     name = config['model']
@@ -62,23 +63,27 @@ class GNN(torch.nn.Module):
 
         if self.num_layer < 1:
             raise ValueError("Number of GNN layers must be no less than 1.")
-        self.linear_x = Linear(self.config['num_atom_features'], self.emb_dim)
         if self.config['gnn_type'] in ['gineconv', 'pnaconv', 'nnconv']:
             self.linear_b = Linear(self.config['num_bond_features'], self.emb_dim)
+        
         # define graph conv layers
-        self.gnns = torch.nn.ModuleList()
-        for _ in range(self.num_layer):
-            self.gnns.append(get_gnn(self.config).model())
+        if self.gnn_type in ['dmpnn']:
+            self.gnns = get_gnn(self.config) # already contains multiple layers
+        else:
+            self.linear_x = Linear(self.config['num_atom_features'], self.emb_dim)
+            self.gnns = nn.ModuleList()
+            for _ in range(self.num_layer):
+                self.gnns.append(get_gnn(self.config).model())
         
         if config['pooling'] == 'edge': # for edge pooling only
             self.pool = PoolingFN(self.config)
             assert len(self.pool) == self.num_layer
         
         ###List of batchnorms
-        if self.bn:
-            self.batch_norms = torch.nn.ModuleList()
+        if self.bn and self.gnn_type not in ['dmpnn']:
+            self.batch_norms = nn.ModuleList()
             for _ in range(self.num_layer):
-                self.batch_norms.append(torch.nn.BatchNorm1d(self.emb_dim))
+                self.batch_norms.append(nn.BatchNorm1d(self.emb_dim))
 
         #self.pair_norm = PairNorm()
         self.gradients = None # for GradCAM     
@@ -104,56 +109,63 @@ class GNN(torch.nn.Module):
         elif len(argv) == 1:
             data = argv[0]
             x, edge_index, edge_attr = data.x, data.edge_index, data.edge_attr
+        elif len(argv) == 5:
+            f_atoms, f_bonds, a2b, b2a, b2revb = argv[0], argv[1], argv[2], argv[3], argv[4]
         else:
             raise ValueError("unmatched number of arguments.")
-        
-        x = self.linear_x(x) # first linear on atoms 
-        #x = F.relu(self.linear_x(x))
-        if self.config['gnn_type'] in ['gineconv', 'pnaconv', 'nnconv']:
-            edge_attr = self.linear_b(edge_attr.float()) # first linear on bonds 
-            #edge_attr = F.relu(self.linear_b(edge_attr.float())) # first linear on bonds 
-        h_list = [x]
-        for layer in range(self.num_layer):
-            if self.config['residual_connect']: # adding residual connection
-                residual = h_list[layer] 
+
+        if self.gnn_type == 'dmpnn':
+            node_representation = self.gnns(f_atoms, f_bonds, a2b, b2a, b2revb)
+        else:
+            x = self.linear_x(x) # first linear on atoms 
+            h_list = [x]
+            #x = F.relu(self.linear_x(x))
             if self.config['gnn_type'] in ['gineconv', 'pnaconv', 'nnconv']:
-                h = self.gnns[layer](h_list[layer], edge_index, edge_attr)
-            else:
-                h = self.gnns[layer](h_list[layer], edge_index)
+                edge_attr = self.linear_b(edge_attr.float()) # first linear on bonds 
+                #edge_attr = F.relu(self.linear_b(edge_attr.float())) # first linear on bonds 
+
+            for layer in range(self.num_layer):
+                if self.config['residual_connect']: # adding residual connection
+                    residual = h_list[layer] 
+                if self.config['gnn_type'] in ['gineconv', 'pnaconv', 'nnconv']:
+                    h = self.gnns[layer](h_list[layer], edge_index, edge_attr)
+                else:
+                    h = self.gnns[layer](h_list[layer], edge_index)
+                
+                ### in order of Skip >> BN >> ReLU
+                if self.config['residual_connect']:
+                    h += residual
+                if self.bn:
+                    h = self.batch_norms[layer](h)
+                
+                #h = self.pair_norm(h, data.batch)
+                if layer == self.num_layer - 1:
+                    #remove relu for the last layer
+                    h = F.dropout(h, self.drop_ratio, training = self.training)
+                    self.last_conv = self.get_activations(h)
+                else:
+                    h = self.act_fn(h)
+                    h = F.dropout(h, self.drop_ratio, training = self.training)
+                if self.config['pooling'] == 'edge':
+                    h, edge_index, batch, _ = self.pool[layer](h, edge_index, batch=batch)
+                h_list.append(h)
+                if self.gradCam and layer == self.num_layer - 1:
+                    h.register_hook(self.activations_hook)
             
-            ### in order of Skip >> BN >> ReLU
-            if self.config['residual_connect']:
-                h += residual
-            if self.bn:
-                h = self.batch_norms[layer](h)
-            
-            #h = self.pair_norm(h, data.batch)
-            if layer == self.num_layer - 1:
-                #remove relu for the last layer
-                h = F.dropout(h, self.drop_ratio, training = self.training)
-                self.last_conv = self.get_activations(h)
-            else:
-                h = self.act_fn(h)
-                h = F.dropout(h, self.drop_ratio, training = self.training)
-            if self.config['pooling'] == 'edge':
-                h, edge_index, batch, _ = self.pool[layer](h, edge_index, batch=batch)
-            h_list.append(h)
-            if self.gradCam and layer == self.num_layer - 1:
-                h.register_hook(self.activations_hook)
-            
-        ### Different implementations of Jk-concat
-        if self.JK == "concat":
-            node_representation = torch.cat(h_list, dim = 1)
-        elif self.JK == "last":
-            node_representation = h_list[-1]
-        elif self.JK == "max":
-            h_list = [h.unsqueeze_(0) for h in h_list]
-            node_representation = torch.max(torch.cat(h_list, dim = 0), dim = 0)[0]
-            #print(node_representation.shape)
-        elif self.JK == "sum":
-            h_list = [h.unsqueeze_(0) for h in h_list]
-            node_representation = torch.sum(torch.cat(h_list, dim = 0), dim = 0)
-            #print(node_representation.shape)
+            ### Different implementations of Jk-concat
+            if self.JK == "concat":
+                node_representation = torch.cat(h_list, dim = 1)
+            elif self.JK == "last":
+                node_representation = h_list[-1]
+            elif self.JK == "max":
+                h_list = [h.unsqueeze_(0) for h in h_list]
+                node_representation = torch.max(torch.cat(h_list, dim = 0), dim = 0)[0]
+                #print(node_representation.shape)
+            elif self.JK == "sum":
+                h_list = [h.unsqueeze_(0) for h in h_list]
+                node_representation = torch.sum(torch.cat(h_list, dim = 0), dim = 0)
+                #print(node_representation.shape)
+        
         if self.config['pooling'] == 'edge':
             return node_representation, batch
         else:
@@ -236,13 +248,21 @@ class GNN_1(torch.nn.Module):
         self.gnn.load_state_dict(torch.load(model_file)) 
 
     def forward(self, data):
-        x, edge_index, edge_attr, batch = data.x, data.edge_index, data.edge_attr.long(), data.batch
+        if self.gnn_type == 'dmpnn':
+             f_atoms, f_bonds, a2b, b2a, b2revb, a_scope = data.x, data.edge_attr, data.a2b, data.b2a, data.b2revb, data.a_scope
+        else:
+            x, edge_index, edge_attr, batch = data.x, data.edge_index, data.edge_attr.long(), data.batch
+        
         if self.config['normalize']:
             Z = data.Z
+            if self.gnn_type == 'dmpnn':
+               Z = torch.cat((torch.zeros(1).int(), data.Z))
         if self.graph_pooling == 'edge':
             node_representation, final_batch = self.gnn(x, edge_index, edge_attr, batch) # node updating
         elif self.twoHop:
             node_representation = self.gnn(data)
+        elif self.gnn_type == 'dmpnn':
+            node_representation = self.gnn(f_atoms, f_bonds, a2b, b2a, b2revb) # node updating 
         else:
             node_representation = self.gnn(x, edge_index, edge_attr) # node updating 
 
@@ -276,6 +296,8 @@ class GNN_1(torch.nn.Module):
                 MolEmbed = layer(MolEmbed)
             if self.config['normalize']:
                 MolEmbed = self.scale[Z, :] * MolEmbed + self.shift[Z, :]
+                #print(MolEmbed.shape)
+                #print(self.scale[Z, :].shape)
             #if self.dataset == 'solNMR' and self.propertyLevel == 'atomMol':
             #    for layer in self.outLayers1:
             #        node_representation = layer(node_representation)
@@ -308,7 +330,10 @@ class GNN_1(torch.nn.Module):
             elif self.propertyLevel == 'atom' and self.dataset not in ['solNMR', 'solALogP', 'qm9/nmr/allAtoms']:
                 return MolEmbed.view(-1,1), None
             elif self.propertyLevel == 'molecule' and self.graph_pooling == 'atomic':
-                return MolEmbed.view(-1), global_add_pool(MolEmbed, batch).view(-1)
+                if self.gnn_type == 'dmpnn':
+                    return MolEmbed.view(-1), self.pool(MolEmbed, a_scope).view(-1)
+                else:
+                    return MolEmbed.view(-1), global_add_pool(MolEmbed, batch).view(-1)
             else:
                 return MolEmbed.view(-1), MolEmbed.view(-1)
             
