@@ -61,3 +61,4 @@ def get_hbond_acceptor_indice(m):
         indice += [i[0] for i in m.GetSubstructMatches(s)]
     indice = np.array(indice)
     return indice
+
