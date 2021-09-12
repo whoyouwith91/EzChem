@@ -106,6 +106,17 @@ class get_data_loader():
             if self.config['propertyLevel'] in ['atom', 'atomMol']: #  either for atom property only or atom/mol property 
                dataset = knnGraph_atom(root=self.config['data_path'])
             num_i_2 = None
+         elif self.config['dataset'] in ['logp_calc/ALL/smaller_58W']:
+            if self.config['propertyLevel'] == 'multiMol': # for multiple mol properties
+               dataset = knnGraph_multi(root=self.config['data_path'])
+            if self.config['propertyLevel'] == 'molecule': # naive, only with solvation property
+               if self.config['gnn_type'] == 'dmpnn':
+                  dataset = knnGraph_dmpnn(root=self.config['data_path'])
+               else:
+                  dataset = knnGraph_logp(root=self.config['data_path'])
+            if self.config['propertyLevel'] in ['atom', 'atomMol']: #  either for atom property only or atom/mol property 
+               dataset = knnGraph_atom(root=self.config['data_path'])
+            num_i_2 = None
          elif self.config['dataset'] in ['qm9/nmr/carbon', 'qm9/nmr/carbon/smaller', 'qm9/nmr/hydrogen', 'nmr/hydrogen', 'nmr/carbon']:
             dataset = knnGraph_nmr(root=self.config['data_path'])
             num_i_2 = None
@@ -141,7 +152,7 @@ class get_data_loader():
          train_dataset, val_dataset = rest_dataset[:my_split_ratio[0]], rest_dataset[my_split_ratio[0]:]
 
       if self.config['model'] in ['physnet']:
-         if self.config['explicit_split']:
+         if self.config['explicit_split']: # when using fixed data split 
             test_loader = torch.utils.data.DataLoader(dataset[self.test_index], batch_size=self.config['batch_size'], num_workers=0, collate_fn=collate_fn)
             val_loader = torch.utils.data.DataLoader(dataset[self.valid_index], batch_size=self.config['batch_size'], num_workers=0, collate_fn=collate_fn)
             train_loader = torch.utils.data.DataLoader(dataset[self.train_index], batch_size=self.config['batch_size'], num_workers=0, shuffle=True, collate_fn=collate_fn)
