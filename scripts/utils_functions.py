@@ -2,12 +2,13 @@ import gc
 import math
 import re
 import time
+from collections import OrderedDict
 
 import numpy as np
 import torch
 import torch_geometric
 
-from matplotlib.cbook import deprecated
+#from deprecated import deprecated
 from scipy.spatial import KDTree
 from torch_scatter import scatter
 
@@ -49,7 +50,7 @@ def _cutoff_fn(D, cutoff):
     return result
 
 
-def gaussian_rbf(D, centers, widths, cutoff):
+def gaussian_rbf(D, centers, widths, cutoff, return_dict=False):
     """
     The rbf expansion of a distance
     Input D: matrix that contains the distance between to atoms
@@ -58,7 +59,10 @@ def gaussian_rbf(D, centers, widths, cutoff):
     """
 
     rbf = _cutoff_fn(D, cutoff) * torch.exp(-widths * (torch.exp(-D) - centers) ** 2)
-    return rbf
+    if return_dict:
+        return {"rbf": rbf}
+    else:
+        return rbf
 
 
 def _get_index_from_matrix(num, previous_num):
@@ -76,7 +80,7 @@ def _get_index_from_matrix(num, previous_num):
     else:
         index = torch.LongTensor(2, num * num).to(device)
         index[0, :] = torch.cat([torch.zeros(num, device=device).long().fill_(i) for i in range(num)], dim=0)
-        index[1, :] = torch.cat([torch.arange(num, device=device).long() for i in range(num)], dim=0)
+        index[1, :] = torch.cat([torch.arange(num, device=device).long() for _ in range(num)], dim=0)
         mask = (index[0, :] != index[1, :])
         matrix_to_index_map[num] = index[:, mask]
         return matrix_to_index_map[num] + previous_num
@@ -438,7 +442,8 @@ def collate_fn(data_list, clone=False, n_extra_node=0):
         keys.remove("group")
 
     if n_extra_node > 0:
-        pass
+        # TODO
+        raise NotImplemented
 
     for key in keys:
         batch[key] = torch.cat([data_list[i][key] for i in range(batch_size)], dim=_cal_dim(key))
@@ -465,11 +470,11 @@ def collate_fn(data_list, clone=False, n_extra_node=0):
     batch.atom_mol_batch = torch.repeat_interleave(torch.arange(batch['N'].shape[0]), batch['N'])
 
     # t0 = record_data('collate fn', t0)
-    return batch.contiguous().to(device)
+    return batch.contiguous()
 
 
 def dime_edge_expansion(R, edge_index, msg_edge_index, n_dime_rbf, dist_calculator, bessel_calculator,
-                        feature_interact_dist, cos_theta=True, **kwargs):
+                        feature_interact_dist, cos_theta=True, return_dict=False, **kwargs):
     # t0 = record_data('edge_msg_gen.load_data', t0)
 
     """
@@ -489,10 +494,13 @@ def dime_edge_expansion(R, edge_index, msg_edge_index, n_dime_rbf, dist_calculat
     sbf_kji = bessel_calculator.cal_sbf(dist_msg, angle_msg, feature_interact_dist)
 
     # t0 = record_data('edge_msg_gen.bond_sbf', t0)
-    return rbf_ji, sbf_kji
+    if return_dict:
+        return {"rbf_ji": rbf_ji, "sbf_kji": sbf_kji}
+    else:
+        return rbf_ji, sbf_kji
 
 
-@deprecated('0.0.1')
+#@deprecated('0.0.1')
 def phys_edge_expansion(R, edge_index, n_phys_rbf, dist_calculator, bessel_calculator, feature_interact_dist):
     dist_atom_non_bond = dist_calculator(R[edge_index[0, :], :], R[edge_index[1, :], :])
     rbf = bessel_calculator.cal_rbf(dist_atom_non_bond, feature_interact_dist, n_phys_rbf)
@@ -615,7 +623,7 @@ def print_val_results(dataset_name, loss, emae, ermse, qmae, qrmse, pmae, prmse)
     return log_info
 
 
-def option_solver(option_txt):
+def option_solver(option_txt, type_conversion=False):
     if len(option_txt.split('[')) == 1:
         return {}
     else:
@@ -623,8 +631,18 @@ def option_solver(option_txt):
         # which will be converted into a dictionary: {n_read_out: 2, other_option: value}
         option_txt = option_txt.split('[')[1]
         option_txt = option_txt[:-1]
-        return {argument.split('=')[0]: argument.split('=')[1]
-                for argument in option_txt.split(',')}
+        result = {argument.split('=')[0].strip(): argument.split('=')[1].strip()
+                  for argument in option_txt.split(',')}
+        if type_conversion:
+            for key in result.keys():
+                try:
+                    tmp = float(result[key])
+                    result[key] = tmp
+                except ValueError:
+                    pass
+                if result[key] in ["True", "False"]:
+                    result[key] = (result[key] == "True")
+        return result
 
 
 def preprocess_config(config_dict):
@@ -636,6 +654,10 @@ def preprocess_config(config_dict):
         if config_dict["use_trained_model"].lower() != "false" else False
     config_dict["use_swag"] = (config_dict["uncertainty_modify"].split('_')[0] == 'swag')
     config_dict["n_atom_embedding"] = 95
+
+    config_dict["n_output"] = len(config_dict["target_names"])
+    if config_dict["action"].endswith("_and_QD"):
+        config_dict["n_output"] += 1
     return config_dict
 
 
@@ -694,15 +716,14 @@ def add_parser_arguments(parser):
                         help="none | concreteDropoutModule | concreteDropoutOutput | swag_${start}_${freq}")
     parser.add_argument('--early_stop', type=int, default=-1, help="early stopping, set to -1 to disable")
     parser.add_argument('--optimizer', type=str, default='emaAms_0.999', help="emaAms_${ema} | sgd")
+    parser.add_argument('--scheduler', type=str, default='StepLR', help="StepLR | ReduceLROnPlateau")
     parser.add_argument('--freeze_option', type=str, default='none', help='none | prev | prev_extra')
     parser.add_argument('--comment', type=str, help='just comment')
     parser.add_argument('--remove_atom_ids', type=int, default=-1, help='remove atoms from dataset')
     parser.add_argument('--coulomb_charge_correct', type=str, default="False",
                         help='calculate charge correction when calculation Coulomb interaction')
     parser.add_argument('--reset_optimizer', type=str, default="True",
-                        help='If true, will reset optimizer regardless of if you use pretrained model or not')
-    parser.add_argument("--n_output", type=int, default=2, help="number of outputs, defaults to 2 for energy and charge"
-                                                                "predictions.")
+                        help='If true, will reset optimizer/scheduler regardless of if you use pretrained model or not')
     parser.add_argument("--action", type=str, default="E", help="name of target, must be consistent with name in"
                                                                 "data_provider, default E is for PhysNet energy")
     parser.add_argument("--target_names", type=str, action="append", default=[],
@@ -715,7 +736,6 @@ def add_parser_arguments(parser):
     parser.add_argument("--reset_output_layers", type=str, default="False")
     parser.add_argument("--batch_norm", type=str, default="False")
     parser.add_argument("--dropout", type=str, default="False")
-    parser.add_argument("--requires_embedding")
     return parser
 
 
@@ -725,11 +745,22 @@ def remove_handler(log):
     return
 
 
+def fix_model_keys(state_dict):
+    tmp = OrderedDict()
+    for key in state_dict:
+        num = key.split(".")[0].split("module")[-1]
+        tmp["main_module_list.{}.{}".format(num, ".".join(key.split(".")[1:])) if key.startswith("module") else key] = \
+        state_dict[key]
+    return tmp
+
+
 if __name__ == '__main__':
     _x_s = torch.arange(0.005, 1., 0.005)
-    _rbf = [gaussian_rbf(_x, torch.arange(0.05, 1, 0.1), torch.as_tensor(25.), torch.as_tensor(1.)).view(1, -1) for _x in _x_s]
+    _rbf = [gaussian_rbf(_x, torch.arange(0.05, 1, 0.1), torch.as_tensor(25.), torch.as_tensor(1.)).view(1, -1) for _x
+            in _x_s]
     _rbf = torch.cat(_rbf, dim=0)
     import matplotlib.pyplot as plt
+
     plt.plot(_x_s, _rbf, color='black')
     plt.show()
     print("finished")

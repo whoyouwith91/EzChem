@@ -76,7 +76,7 @@ def train(model, optimizer, dataloader, config, scheduler=None):
         optimizer.zero_grad()
         y = model(data) # y contains different outputs depending on the # of tasks
         
-        if config['dataset'] in ['solNMR', 'solALogP', 'qm9/nmr/allAtoms', 'sol_calc/ALL/smaller', 'sol_calc/ALL/smaller_18W', 'sol_calc/ALL/smaller_28W', 'sol_calc/ALL/smaller_38W', 'sol_calc/ALL/smaller_48W', 'sol_calc/ALL/smaller_58W']:
+        if config['dataset'] in ['solNMR', 'solALogP', 'qm9/nmr/allAtoms', 'sol_calc/ALL/smaller', 'sol_calc/ALL/smaller_18W', 'sol_calc/ALL/smaller_28W', 'sol_calc/ALL/smaller_38W', 'sol_calc/ALL/smaller_48W', 'sol_calc/ALL/smaller_58W', 'logp_calc/ALL/smaller_58W']:
             if config['propertyLevel'] == 'molecule': # single task on regression
                 assert config['taskType'] == 'single'
                 loss = get_loss_fn(config['loss'])(y[1], data.mol_sol_wat)
@@ -179,7 +179,7 @@ def test(model, dataloader, config):
             data = data.to(config['device'])
             y = model(data)
 
-            if config['dataset'] in ['solNMR', 'solALogP', 'qm9/nmr/allAtoms', 'sol_calc/ALL/smaller', 'sol_calc/ALL/smaller_18W', 'sol_calc/ALL/smaller_28W', 'sol_calc/ALL/smaller_38W', 'sol_calc/ALL/smaller_48W', 'sol_calc/ALL/smaller_58W']:
+            if config['dataset'] in ['solNMR', 'solALogP', 'qm9/nmr/allAtoms', 'sol_calc/ALL/smaller', 'sol_calc/ALL/smaller_18W', 'sol_calc/ALL/smaller_28W', 'sol_calc/ALL/smaller_38W', 'sol_calc/ALL/smaller_48W', 'sol_calc/ALL/smaller_58W', 'logp_calc/ALL/smaller_58W']:
                 if config['test_level'] == 'molecule': # the metrics on single task, currently on solvation energy only
                     if config['propertyLevel'] == 'multiMol':
                         pred = y[3]
@@ -475,37 +475,44 @@ def train_physnet(model, optimizer, dataloader, config, scheduler=None):
         optimizer.zero_grad()
         y0 = model(data)
         
-        if config['mask']: # for qm9/nmr/carbon or Exp. nmr/carbon nmr/hydrogen
+        if config['dataset'] in ['qm9/nmr/carbon', 'nmr/carbon', 'nmr/hydrogen']: # for qm9/nmr/carbon or Exp. nmr/carbon nmr/hydrogen
             loss = get_loss_fn(config['loss'])(data.y[data.mask>0], y0['atom_prop'].float().view(-1)[data.mask>0])
-            all_atoms += data.mask.sum()
+            all_atoms += data.mask.sum() # with mask information
             all_loss += loss.item()*data.mask.sum()
-        else:
-            if config['dataset'] in ['sol_calc/ALL', 'sol_calc/ALL/COMPLETE']:
-                loss = get_loss_fn(config['loss'])(data.CalcSol, y0['mol_prop'].view(-1)) # data.CalcSol is only for water solvation energy
-                all_loss += loss.item()*data.E.size()[0]
-            elif config['dataset'] in ['solNMR']:
-                if config['propertyLevel'] == 'molecule':
-                    loss = get_loss_fn(config['loss'])(data.mol_y, y0['mol_prop'].view(-1)) # data.CalcSol is only for water solvation energy
-                    all_loss += loss.item()*data.mol_y.size()[0]
-                if config['propertyLevel'] == 'atom':
-                    loss = get_loss_fn(config['loss'])(data.atom_y, y0['atom_prop'].float().view(-1))
-                    all_atoms += data.N.sum().item()
-                    all_loss += loss.item()*data.N.sum()
-                if config['propertyLevel'] == 'atomMol':
-                    loss = get_loss_fn(config['loss'])(data.mol_y, y0['mol_prop'].view(-1)) + get_loss_fn(config['loss'])(data.atom_y, y0['atom_prop'].float().view(-1))
-            elif config['dataset'] in ['qm9/u0']:
-                loss = get_loss_fn(config['loss'])(data.E, y0['mol_prop'].float().view(-1))
-                all_loss += loss.item()*data.E.size()[0]
-            else: # for qm9/nmr/allAtoms
-                loss = get_loss_fn(config['loss'])(data.y, y0['atom_prop'].float().view(-1))
-                all_atoms += data.N.sum()
+        
+        elif config['dataset'] in ['sol_calc/ALL', 'sol_calc/ALL/COMPLETE', 'sol_calc/ALL/smaller', 'deepchem/freesol', 'deepchem/delaney']:
+            loss = get_loss_fn(config['loss'])(data.mol_sol_wat, y0['mol_prop'].view(-1)) # data.mol_sol_wat is not only for water solvation energy. TODO
+            all_loss += loss.item()*data.mol_sol_wat.size()[0]
+        
+        elif config['dataset'] in ['solNMR']: #TODO
+            if config['propertyLevel'] == 'molecule':
+                loss = get_loss_fn(config['loss'])(data.mol_y, y0['mol_prop'].view(-1)) # data.CalcSol is only for water solvation energy
+                all_loss += loss.item()*data.mol_y.size()[0]
+            elif config['propertyLevel'] == 'atom':
+                loss = get_loss_fn(config['loss'])(data.atom_y, y0['atom_prop'].float().view(-1))
+                all_atoms += data.N.sum().item()
                 all_loss += loss.item()*data.N.sum()
+            elif config['propertyLevel'] == 'atomMol':
+                loss = get_loss_fn(config['loss'])(data.mol_y, y0['mol_prop'].view(-1)) + get_loss_fn(config['loss'])(data.atom_y, y0['atom_prop'].float().view(-1))
+            else:
+                pass 
+
+        elif config['dataset'] in ['qm9/u0']:
+            loss = get_loss_fn(config['loss'])(data.E, y0['mol_prop'].float().view(-1))
+            all_loss += loss.item()*data.E.size()[0]
+        
+        else: # for qm9/nmr/allAtoms
+            loss = get_loss_fn(config['loss'])(data.y, y0['atom_prop'].float().view(-1))
+            all_atoms += data.N.sum()
+            all_loss += loss.item()*data.N.sum()
+        
         loss.backward()
         #torch.nn.utils.clip_grad_norm_(model.parameters(), 1000.)
         optimizer.step()
         if config['scheduler'] in ['NoamLR', 'step']:
             scheduler.step()
-    if config['dataset'] in ['sol_calc/ALL', 'sol_calc/ALL/COMPLETE', 'qm9/u0']: 
+    
+    if config['dataset'] in ['sol_calc/ALL', 'sol_calc/ALL/COMPLETE', 'qm9/u0', 'sol_calc/ALL/smaller', 'deepchem/freesol', 'deepchem/delaney']: 
         return np.sqrt((all_loss / len(dataloader.dataset)))
     elif config['dataset'] in ['solNMR']:
         if config['propertyLevel'] == 'molecule':
@@ -527,26 +534,32 @@ def test_physnet(model, dataloader, config):
     with torch.no_grad():
         for data in dataloader:
             data = data.to(config['device'])
-            if config['mask']:
+            if config['dataset'] in ['qm9/nmr/carbon', 'nmr/carbon', 'nmr/hydrogen']: # for qm9/nmr/carbon or Exp. nmr/carbon nmr/hydrogen
                 error += get_metrics_fn(config['metrics'])(model(data)['atom_prop'].view(-1)[data.mask>0], data.y[data.mask>0])*data.mask.sum().item()
                 total_N += data.mask.sum().item()
-            else:
-                if config['dataset'] in ['sol_calc/ALL', 'sol_calc/ALL/COMPLETE']:
-                    error += get_metrics_fn(config['metrics'])(model(data)['mol_prop'].view(-1), data.CalcSol)*data.E.size()[0]
-                elif config['dataset'] in ['solNMR']:
-                    if config['test_level'] == 'molecule':
-                        error += get_metrics_fn(config['metrics'])(model(data)['mol_prop'].view(-1), data.mol_y)*data.mol_y.size()[0]
-                    if config['test_level'] == 'atom':
-                        total_N += data.N.sum().item()
-                        error += get_metrics_fn(config['metrics'])(model(data)['atom_prop'].view(-1), data.atom_y)*data.N.sum().item()
+
+            elif config['dataset'] in ['sol_calc/ALL', 'sol_calc/ALL/COMPLETE', 'sol_calc/ALL/smaller', 'deepchem/freesol', 'deepchem/delaney']:
+                error += get_metrics_fn(config['metrics'])(model(data)['mol_prop'].view(-1), data.mol_sol_wat)*data.mol_sol_wat.size()[0]
+            
+            elif config['dataset'] in ['solNMR']:
+                if config['test_level'] == 'molecule':
+                    error += get_metrics_fn(config['metrics'])(model(data)['mol_prop'].view(-1), data.mol_y)*data.mol_y.size()[0]
+                elif config['test_level'] == 'atom':
+                    total_N += data.N.sum().item()
+                    error += get_metrics_fn(config['metrics'])(model(data)['atom_prop'].view(-1), data.atom_y)*data.N.sum().item()
                     #if config['action'] == 'atomMol':
                     #    error += get_metrics_fn(config['metrics'])(model(data)['mol_prop'].view(-1), data.mol_y)*data.mol_y.size()[0]
-                elif config['dataset'] in ['qm9/u0']:
-                    error += get_metrics_fn(config['metrics'])(model(data)['mol_prop'].view(-1), data.E)*data.E.size()[0]
                 else:
-                    total_N += data.N.sum().item()
-                    error += get_metrics_fn(config['metrics'])(model(data)['atom_prop'].view(-1), data.y)*data.N.sum().item()
-        if config['dataset'] in ['sol_calc/ALL', 'sol_calc/ALL/COMPLETE', 'qm9/u0']:
+                    pass 
+            
+            elif config['dataset'] in ['qm9/u0']:
+                error += get_metrics_fn(config['metrics'])(model(data)['mol_prop'].view(-1), data.E)*data.E.size()[0]
+            
+            else:
+                total_N += data.N.sum().item()
+                error += get_metrics_fn(config['metrics'])(model(data)['atom_prop'].view(-1), data.y)*data.N.sum().item()
+        
+        if config['dataset'] in ['sol_calc/ALL', 'sol_calc/ALL/COMPLETE', 'qm9/u0', 'sol_calc/ALL/smaller', 'deepchem/freesol', 'deepchem/delaney']:
             return error.item() / len(dataloader.dataset) # MAE
         elif config['dataset'] in ['solNMR']:
             if config['test_level'] == 'molecule':

@@ -415,6 +415,14 @@ def getDegreeforPNA(loader):
     return deg, str(list(deg.numpy()))
 
 def getScaleandShift(config):
+    if config['dataset'] in ['pka/dataWarrior/acidic']:
+            energy_shift = torch.tensor([0.3268184327923009]) # statistics over all compounds in train set after ACSF, unit is kcal.mol
+            energy_scale = torch.tensor([0.23321891601867273]) # statistics over all compounds in train set after ACSF, unit is kcal.mol
+    if config['dataset'] in ['pka/dataWarrior/basic']:
+            #energy_shift = torch.tensor([0.])
+            #energy_scale = torch.tensor([1.])
+            energy_shift = torch.tensor([0.26469873653415377]) # statistics over all compounds in train set after ACSF, unit is kcal.mol
+            energy_scale = torch.tensor([0.19022209195036874]) # statistics over all compounds in train set after ACSF, unit is kcal.mol
     if config['dataset'] in ['deepchem/freesol']:
             #energy_shift = torch.tensor([-0.448323499821181]) # statistics over all compounds in train set before ACSF unit is kcal/mol
             #energy_scale = torch.tensor([0.5231881290032624]) # statistics over all compounds in train set before ACSF, unit is kcal/mol
@@ -452,6 +460,9 @@ def getScaleandShift(config):
     if config['dataset'] in ['sol_calc/ALL/smaller', 'sol_calc/ALL/smaller_18W', 'sol_calc/ALL/smaller_28W', 'sol_calc/ALL/smaller_38W', 'sol_calc/ALL/smaller_48W', 'sol_calc/ALL/smaller_58W']:
             energy_shift = torch.tensor([-8.596711050283846]) # unit is kcal/mol
             energy_scale = torch.tensor([5.428582987359422]) # unit is kcal/mol
+    if config['dataset'] in ['logp_calc/ALL/smaller_58W']:
+            energy_shift = torch.tensor([0.]) # unit is kcal/mol
+            energy_scale = torch.tensor([1.]) # unit is kcal/mol
     if config['dataset'] in ['solALogP', 'solNMR']:
             if config['propertyLevel'] == 'multiMol':
                 energy_shift = torch.tensor([-4.232369738478913]) # eV for smaller gas energy

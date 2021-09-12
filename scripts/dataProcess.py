@@ -477,7 +477,7 @@ class physnet(InMemoryDataset):
         data_list = []
         raw_data_list = torch.load(self.raw_paths[0])
         for _, value in raw_data_list.items():
-            mol = value[0][0]
+            mol = value[0]
             #name = mol.GetProp('_Name')
             #print(name)
             N = mol.GetNumAtoms()
@@ -501,9 +501,9 @@ class physnet(InMemoryDataset):
             #for k,v in enumerate(value[0][2]):
             #    mask[int(k), 0] = 1.0
             #    vals[int(k), 0] = v
-            mol_y = torch.FloatTensor([value[0][1]]).flatten()
-            atom_y = torch.FloatTensor(value[0][2]).flatten()
-            data = Data(R=pos, Z=z, atom_y=atom_y, mol_y=mol_y, N=N_)
+            mol_y = torch.FloatTensor([value[1]]).flatten()
+            #atom_y = torch.FloatTensor(value[0][2]).flatten()
+            data = Data(R=pos, Z=z, mol_sol_wat=mol_y, N=N_)
 
             if self.pre_filter is not None and not self.pre_filter(data):
                 continue
@@ -769,6 +769,50 @@ class knnGraph_single(InMemoryDataset):
         torch.save((data, slices), self.processed_paths[0])
 #---------------------------------------------SingleTask---------------------------------------------
 
+#--------------------------------------------SingleTask----------------------------------------------
+class knnGraph_logp(InMemoryDataset):
+    def __init__(self,
+                 root,
+                 transform=None,
+                 pre_transform=None,
+                 pre_filter=None):
+        super(knnGraph_logp, self).__init__(root, transform, pre_transform, pre_filter)
+        self.type = type
+        self.data, self.slices = torch.load(self.processed_paths[0])
+
+    @property
+    def raw_file_names(self):
+        return 'temp.pt'
+
+    @property
+    def processed_file_names(self):
+        return 'processed.pt'
+    
+    def download(self):
+        pass
+
+    def process(self):
+        raw_data_list = torch.load(self.raw_paths[0])
+        data_list = [
+            Data(
+                x=d['x'],
+                edge_index=d['edge_index'],
+                edge_attr=d['edge_attr'],
+                mol_sol_wat=d['mol_sol_logp'], # stick with mol_sol_wat first 
+                N=d['N'],
+                Z=d['Z']
+                ) for d in raw_data_list
+        ]
+
+        if self.pre_filter is not None:
+            data_list = [data for data in data_list if self.pre_filter(data)]
+
+        if self.pre_transform is not None:
+            data_list = [self.pre_transform(data) for data in data_list]
+
+        data, slices = self.collate(data_list)
+        torch.save((data, slices), self.processed_paths[0])
+#---------------------------------------------SingleTask---------------------------------------------
 
 #-------------------------------------------------EFGS-----------------------------------------------
 class knnGraph_EFGS(InMemoryDataset):
