@@ -87,7 +87,7 @@ def main():
     if args.model in ['physnet']: # loading physnet params
         this_dic['n_feature'] = this_dic['emb_dim']
         this_dic = {**this_dic, **physnet_kwargs}
-    if this_dic['gnn_type'] == 'pnaconv':
+    if this_dic['gnn_type'] == 'pnaconv': #
         this_dic['deg'], this_dic['deg_value'] = getDegreeforPNA(train_loader)
 
     model = get_model(this_dic)
