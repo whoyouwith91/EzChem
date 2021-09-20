@@ -1,6 +1,5 @@
 from dataProcess import *
 from k_gnn import DataLoader
-from DummyIMDataset import DummyIMDataset
 from DataPrepareUtils import my_pre_transform
 from utils_functions import collate_fn # sPhysnet
 import torch

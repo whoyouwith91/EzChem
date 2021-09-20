@@ -163,13 +163,13 @@ def main():
                     mol_smi = Chem.AddHs(mol)
                     #mol = getMol(file, id_)
 
-                    if not this_dic['ACSF'] and not this_dic['physnet']:
+                    if not this_dic['physnet']:
                         mol_graph = MolGraph(mol, args.usePeriodics, this_dic['model'])
                         molgraphs['x'] = torch.FloatTensor(mol_graph.f_atoms)
 
                     if this_dic['ACSF'] and not this_dic['physnet']:
                         if file in ['pubchem', 'zinc']:
-                            path_to_xyz = '/ext3/Frag20/less_than_10/xyz' # path to the singularity file overlay-50G-10M.ext3
+                            path_to_xyz = '/ext3/Frag20/lessthan10/xyz' # path to the singularity file overlay-50G-10M.ext3
                         else:
                             path_to_xyz = '/ext3/Frag20/{}/xyz'.format(file)
                         file_id = file +'_' + str(int(id_)) # such as 'pubchem_100001'
@@ -547,6 +547,11 @@ def main():
                             if args.train_type in ['FT', 'TL']:
                                 species = ['B', 'Br', 'C', 'Cl', 'F', 'H', 'N', 'O', 'P', 'S']
                             periodic = False
+                        if this_dic['dataset'] in ['secSolu/set1', 'secSolu/set2']:
+                            species = ['Br', 'C', 'Cl', 'F', 'H', 'I', 'N', 'O', 'P', 'S']
+                            if args.train_type in ['FT', 'TL']:
+                                species = ['B', 'Br', 'C', 'Cl', 'F', 'H', 'N', 'O', 'P', 'S']
+                            periodic = False
 
                         acsf = ACSF(
                                     species=species,
@@ -638,7 +643,7 @@ def main():
                             continue 
                         if not set([atom.GetSymbol() for atom in Chem.MolFromSmiles(smi).GetAtoms()]) < set(['B', 'Br', 'C', 'Cl', 'F', 'H', 'N', 'O', 'P', 'S']):
                             continue
-                        if not os.path.exists(os.path.join(alldatapath, args.dataset, 'split', args.style, 'MMFFXYZ', '{}.xyz'.format(idx))):
+                        if not os.path.exists(os.path.join(alldatapath, args.dataset, 'split', args.style, 'sdf', '{}.sdf'.format(idx))):
                             continue
                         
                         mol_sdf = SDMolSupplier(os.path.join(alldatapath, args.dataset, 'split', args.style, 'sdf', '{}.sdf'.format(idx)))

@@ -988,10 +988,10 @@ def collate_dmpnn(data_list):
     * :code:`b2b`: (Optional) A mapping from a bond index to incoming bond indices.
     * :code:`a2a`: (Optional): A mapping from an atom index to neighboring atom indices.
     """
-    keys = ['N', 'Z', 'mol_y']
-    #keys = ['N', 'Z', 'mol_sol_wat']
-    atom_fdim = 260
-    bond_fdim = 260+7
+    #keys = ['N', 'Z', 'mol_y']
+    keys = ['N', 'Z', 'mol_sol_wat']
+    atom_fdim = 50
+    bond_fdim = 50+7
     batch = Batch()
     #batch.batch = []
     
@@ -1015,8 +1015,8 @@ def collate_dmpnn(data_list):
         
         batch['N'].append(mol_graph.N)
         batch['Z'].append(mol_graph.Z)
-        #batch['mol_sol_wat'].append(mol_graph.mol_sol_wat)
-        batch['mol_y'].append(mol_graph.mol_y)
+        batch['mol_sol_wat'].append(mol_graph.mol_sol_wat)
+        #batch['mol_y'].append(mol_graph.mol_y)
         
         #batch.batch.append(torch.full((mol_graph.N.long().item(), ), i, dtype=torch.long))
         f_atoms.extend(mol_graph.x)

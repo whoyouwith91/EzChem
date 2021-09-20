@@ -480,7 +480,7 @@ def train_physnet(model, optimizer, dataloader, config, scheduler=None):
             all_atoms += data.mask.sum() # with mask information
             all_loss += loss.item()*data.mask.sum()
         
-        elif config['dataset'] in ['sol_calc/ALL', 'sol_calc/ALL/COMPLETE', 'sol_calc/ALL/smaller', 'deepchem/freesol', 'deepchem/delaney']:
+        elif config['dataset'] in ['sol_calc/ALL', 'sol_calc/ALL/COMPLETE', 'sol_calc/ALL/smaller', 'deepchem/freesol', 'deepchem/delaney', 'deepchem/logp', 'mp/bradley', 'pka/dataWarrior/acidic', 'pka/dataWarrior/basic']:
             loss = get_loss_fn(config['loss'])(data.mol_sol_wat, y0['mol_prop'].view(-1)) # data.mol_sol_wat is not only for water solvation energy. TODO
             all_loss += loss.item()*data.mol_sol_wat.size()[0]
         
@@ -512,7 +512,7 @@ def train_physnet(model, optimizer, dataloader, config, scheduler=None):
         if config['scheduler'] in ['NoamLR', 'step']:
             scheduler.step()
     
-    if config['dataset'] in ['sol_calc/ALL', 'sol_calc/ALL/COMPLETE', 'qm9/u0', 'sol_calc/ALL/smaller', 'deepchem/freesol', 'deepchem/delaney']: 
+    if config['dataset'] in ['sol_calc/ALL', 'sol_calc/ALL/COMPLETE', 'qm9/u0', 'sol_calc/ALL/smaller', 'deepchem/freesol', 'deepchem/delaney', 'deepchem/logp', 'mp/bradley', 'pka/dataWarrior/acidic', 'pka/dataWarrior/basic']: 
         return np.sqrt((all_loss / len(dataloader.dataset)))
     elif config['dataset'] in ['solNMR']:
         if config['propertyLevel'] == 'molecule':
@@ -538,7 +538,7 @@ def test_physnet(model, dataloader, config):
                 error += get_metrics_fn(config['metrics'])(model(data)['atom_prop'].view(-1)[data.mask>0], data.y[data.mask>0])*data.mask.sum().item()
                 total_N += data.mask.sum().item()
 
-            elif config['dataset'] in ['sol_calc/ALL', 'sol_calc/ALL/COMPLETE', 'sol_calc/ALL/smaller', 'deepchem/freesol', 'deepchem/delaney']:
+            elif config['dataset'] in ['sol_calc/ALL', 'sol_calc/ALL/COMPLETE', 'sol_calc/ALL/smaller', 'deepchem/freesol', 'deepchem/delaney', 'deepchem/logp', 'mp/bradley', 'pka/dataWarrior/acidic', 'pka/dataWarrior/basic']:
                 error += get_metrics_fn(config['metrics'])(model(data)['mol_prop'].view(-1), data.mol_sol_wat)*data.mol_sol_wat.size()[0]
             
             elif config['dataset'] in ['solNMR']:
@@ -559,7 +559,7 @@ def test_physnet(model, dataloader, config):
                 total_N += data.N.sum().item()
                 error += get_metrics_fn(config['metrics'])(model(data)['atom_prop'].view(-1), data.y)*data.N.sum().item()
         
-        if config['dataset'] in ['sol_calc/ALL', 'sol_calc/ALL/COMPLETE', 'qm9/u0', 'sol_calc/ALL/smaller', 'deepchem/freesol', 'deepchem/delaney']:
+        if config['dataset'] in ['sol_calc/ALL', 'sol_calc/ALL/COMPLETE', 'qm9/u0', 'sol_calc/ALL/smaller', 'deepchem/freesol', 'deepchem/delaney', 'deepchem/logp', 'mp/bradley', 'pka/dataWarrior/acidic', 'pka/dataWarrior/basic']:
             return error.item() / len(dataloader.dataset) # MAE
         elif config['dataset'] in ['solNMR']:
             if config['test_level'] == 'molecule':

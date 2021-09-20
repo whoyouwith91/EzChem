@@ -32,7 +32,16 @@ def get_gnn(config):
         return nn_conv(config)
     if name == 'dmpnn':
         return DMPNN(config)
+    if name == 'dnn':
+        return DNN(config)
     
+class DNN():
+    def __init__(self, config):
+        super(DNN, self).__init__()
+        self.emb_dim = config['emb_dim']
+
+    def model(self):
+        return Linear(self.emb_dim, self.emb_dim)
 
 class gcn_conv():
     # https://pytorch-geometric.readthedocs.io/en/latest/modules/nn.html#torch_geometric.nn.conv.GCNConv

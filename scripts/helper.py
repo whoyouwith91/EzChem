@@ -476,6 +476,11 @@ def getScaleandShift(config):
             else:
                 energy_shift = torch.tensor([0.])
                 energy_scale = torch.tensor([1.])
+    if config['dataset'] in ['secSolu/set1', 'secSolu/set2']:
+            #energy_shift = torch.tensor([-0.12582392787107535])
+            #energy_scale = torch.tensor([0.09535901863588805])
+            energy_shift = torch.tensor([-0.09729485081724314])
+            energy_scale = torch.tensor([0.09025854835266788])
     config['energy_shift'], config['energy_shift_value'] = energy_shift, energy_shift.item()
     config['energy_scale'], config['energy_scale_value'] = energy_scale, energy_scale.item()
     

@@ -129,6 +129,8 @@ class GNN(torch.nn.Module):
                     residual = h_list[layer] 
                 if self.config['gnn_type'] in ['gineconv', 'pnaconv', 'nnconv']:
                     h = self.gnns[layer](h_list[layer], edge_index, edge_attr)
+                elif self.config['gnn_type'] in ['dnn']:
+                    h = self.gnns[layer](h_list[layer])
                 else:
                     h = self.gnns[layer](h_list[layer], edge_index)
                 
@@ -263,8 +265,10 @@ class GNN_1(torch.nn.Module):
             node_representation = self.gnn(data)
         elif self.gnn_type == 'dmpnn':
             node_representation = self.gnn(f_atoms, f_bonds, a2b, b2a, b2revb) # node updating 
+        elif self.gnn_type == 'dnn':
+            node_representation = self.gnn(data) # node updating 
         else:
-            node_representation = self.gnn(x, edge_index, edge_attr) # node updating 
+            node_representation = self.gnn(x, edge_index, edge_attr) # node updating
 
         # graph pooling 
         if self.propertyLevel in ['molecule', 'atomMol', 'multiMol']: 
