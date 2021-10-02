@@ -77,8 +77,8 @@ def main():
     
     # use scale and shift
     if args.normalize: 
-        this_dic = getScaleandShift(this_dic)
-
+        #this_dic = getScaleandShift(this_dic)
+        this_dic = getScaleandShift_from_scratch(this_dic, train_loader)
     # for special cases 
     if args.EFGS:
         this_dic['efgs_lenth'] = len(vocab)
@@ -185,7 +185,7 @@ def main():
                 best_val_error = saveModel(this_dic, epoch, shadow_model, best_val_error, val_error)
             else:
                 best_val_error = saveModel(this_dic, epoch, model_, best_val_error, val_error) # save model if validation error hits new lower 
-    torch.save(model_.state_dict(), os.path.join(this_dic['running_path'], 'trained_model', 'model_last.pt'))
+        torch.save(model_.state_dict(), os.path.join(this_dic['running_path'], 'trained_model', 'model_last.pt'))
 
 if __name__ == "__main__":
     #cycle_index(10,2)

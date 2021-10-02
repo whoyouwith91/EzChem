@@ -3,6 +3,7 @@ from k_gnn import DataLoader
 from DataPrepareUtils import my_pre_transform
 from utils_functions import collate_fn # sPhysnet
 import torch
+import random
 
 
 class get_split_data():
@@ -26,6 +27,9 @@ class get_data_loader():
          self.train_size, self.val_size = config['train_size'], config['val_size']
       else:
          self.train_size, self.val_size = config['train_size'], config['val_size']
+         if config['sample']:
+            self.data_seed = config['data_seed']
+            self.sample_size = config['sample_size']
 
       if self.name == None:
          raise ValueError('Please specify one dataset you want to work on!')
@@ -89,8 +93,11 @@ class get_data_loader():
          return train_loader,  val_loader, test_loader, num_features, num_bond_features, None
 
       elif self.config['model'] in ['physnet']:
-         #if self.config['dataset'] == 'qm9':
-         dataset = physnet(root=self.config['data_path'], pre_transform=my_pre_transform)
+         if self.config['dataset'] in ['nmr/carbon', 'nmr/hydrogen']:
+            dataset = physnet_nmr(root=self.config['data_path'], pre_transform=my_pre_transform)
+            #if self.config['dataset'] == 'qm9':
+         else:
+            dataset = physnet(root=self.config['data_path'], pre_transform=my_pre_transform)
          #dataset = DummyIMDataset(root=self.config['data_path'], dataset_name='processed.pt')
          num_i_2 = None
       else: # 1-GNN
@@ -105,7 +112,7 @@ class get_data_loader():
             if self.config['propertyLevel'] in ['atom', 'atomMol']: #  either for atom property only or atom/mol property 
                dataset = knnGraph_atom(root=self.config['data_path'])
             num_i_2 = None
-         elif self.config['dataset'] in ['logp_calc/ALL/smaller_58W']:
+         elif self.config['dataset'] in ['logp_calc/ALL/smaller_58W', 'logp_calc/ALL/smaller']:
             if self.config['propertyLevel'] == 'multiMol': # for multiple mol properties
                dataset = knnGraph_multi(root=self.config['data_path'])
             if self.config['propertyLevel'] == 'molecule': # naive, only with solvation property
@@ -149,6 +156,10 @@ class get_data_loader():
          test_dataset = dataset[my_split_ratio[0]+my_split_ratio[1]:]
          rest_dataset = dataset[:my_split_ratio[0]+my_split_ratio[1]]
          train_dataset, val_dataset = rest_dataset[:my_split_ratio[0]], rest_dataset[my_split_ratio[0]:]
+
+      if self.config['sample']:
+         random.seed(self.data_seed)
+         train_dataset = train_dataset.index_select(random.sample(range(self.train_size), self.sample_size))
 
       if self.config['model'] in ['physnet']:
          if self.config['explicit_split']: # when using fixed data split 

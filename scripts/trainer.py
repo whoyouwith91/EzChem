@@ -76,7 +76,7 @@ def train(model, optimizer, dataloader, config, scheduler=None):
         optimizer.zero_grad()
         y = model(data) # y contains different outputs depending on the # of tasks
         
-        if config['dataset'] in ['solNMR', 'solALogP', 'qm9/nmr/allAtoms', 'sol_calc/ALL/smaller', 'sol_calc/ALL/smaller_18W', 'sol_calc/ALL/smaller_28W', 'sol_calc/ALL/smaller_38W', 'sol_calc/ALL/smaller_48W', 'sol_calc/ALL/smaller_58W', 'logp_calc/ALL/smaller_58W']:
+        if config['dataset'] in ['solNMR', 'solALogP', 'qm9/nmr/allAtoms', 'sol_calc/ALL/smaller', 'sol_calc/ALL/smaller_18W', 'sol_calc/ALL/smaller_28W', 'sol_calc/ALL/smaller_38W', 'sol_calc/ALL/smaller_48W', 'sol_calc/ALL/smaller_58W', 'logp_calc/ALL/smaller_58W', 'logp_calc/ALL/smaller']:
             if config['propertyLevel'] == 'molecule': # single task on regression
                 assert config['taskType'] == 'single'
                 loss = get_loss_fn(config['loss'])(y[1], data.mol_sol_wat)
@@ -179,7 +179,7 @@ def test(model, dataloader, config):
             data = data.to(config['device'])
             y = model(data)
 
-            if config['dataset'] in ['solNMR', 'solALogP', 'qm9/nmr/allAtoms', 'sol_calc/ALL/smaller', 'sol_calc/ALL/smaller_18W', 'sol_calc/ALL/smaller_28W', 'sol_calc/ALL/smaller_38W', 'sol_calc/ALL/smaller_48W', 'sol_calc/ALL/smaller_58W', 'logp_calc/ALL/smaller_58W']:
+            if config['dataset'] in ['solNMR', 'solALogP', 'qm9/nmr/allAtoms', 'sol_calc/ALL/smaller', 'sol_calc/ALL/smaller_18W', 'sol_calc/ALL/smaller_28W', 'sol_calc/ALL/smaller_38W', 'sol_calc/ALL/smaller_48W', 'sol_calc/ALL/smaller_58W', 'logp_calc/ALL/smaller_58W', 'logp_calc/ALL/smaller']:
                 if config['test_level'] == 'molecule': # the metrics on single task, currently on solvation energy only
                     if config['propertyLevel'] == 'multiMol':
                         pred = y[3]

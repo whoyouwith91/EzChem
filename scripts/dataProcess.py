@@ -16,7 +16,9 @@ from sklearn.metrics.pairwise import euclidean_distances
 
 from torch.utils.data import DataLoader, Dataset, Sampler
 from random import Random
+from tqdm import tqdm 
 import numpy as np
+import pandas as pd
 from typing import Dict, Iterator, List, Optional, Union, Tuple
 
 #vocab = pickle.load(open('/scratch/dz1061/gcn/datasets/EFGS/vocab/ours/ours_vocab.pt', 'rb'))
@@ -514,6 +516,87 @@ class physnet(InMemoryDataset):
 
         torch.save(self.collate(data_list), self.processed_paths[0])
 #---------------------------------------------PhysNet------------------------------------------------
+
+#---------------------------------------------PhysNet_NMR------------------------------------------------
+class physnet_nmr(InMemoryDataset):
+    #raw_url = ('https://deepchemdata.s3-us-west-1.amazonaws.com/datasets/'
+    #           'molnet_publish/qm9.zip')
+    #raw_url2 = 'https://ndownloader.figshare.com/files/3195404'
+    #processed_url = 'https://pytorch-geometric.com/datasets/qm9_v2.zip'
+
+    def __init__(self, root, transform=None, pre_transform=None,
+                 pre_filter=None):
+        super(physnet_nmr, self).__init__(root, transform, pre_transform, pre_filter)
+        self.data, self.slices = torch.load(self.processed_paths[0])
+
+    @property
+    def raw_file_names(self):
+        return ['nmr.sdf', 'nmrshiftdb.pickle']
+
+    @property
+    def processed_file_names(self):
+        return 'processed.pt'
+
+    def process(self):
+
+        with open(self.raw_paths[1], 'rb') as f: # modify this function TODO
+            data = pickle.load(f)
+        all_ = pd.concat([data['train_df'], data['test_df']])
+        #print(all_['molecule_id'].tolist())
+        
+        suppl = Chem.SDMolSupplier(self.raw_paths[0], removeHs=False,
+                                   sanitize=False)
+
+        data_list = []
+        for i, mol in enumerate(tqdm(suppl)):
+            name = mol.GetProp('_Name')
+            #print(name)
+            N = mol.GetNumAtoms()
+            #print(N)
+            N_ = torch.tensor(N).view(-1)
+
+            pos = suppl.GetItemText(i).split('\n')[4:4 + N]
+            pos = [[float(x) for x in line.split()[:3]] for line in pos]
+            pos = torch.tensor(pos, dtype=torch.float)
+
+            atomic_number = []
+            for atom in mol.GetAtoms():
+                atomic_number.append(atom.GetAtomicNum())
+            z = torch.tensor(atomic_number, dtype=torch.long)
+            
+            #print('here')
+            if int(name) in all_['molecule_id'].tolist():
+                #print('here')
+                spectra_numbers = all_[all_['molecule_id'] == int(name)]['value'].shape[0]
+                #print(spectra_numbers)
+                if spectra_numbers > 1:
+                    print('multiple spectra found for %s!' % name)
+                for i in range(spectra_numbers):
+                    mask = np.zeros((N, 1), dtype=np.float32)
+                    vals = np.zeros((N, 1), dtype=np.float32)
+                    #print(i)
+                    tar = all_[all_['molecule_id'] == int(name)]['value'].values[i][0]
+                    #print(tar)
+                    for k, v in tar.items():
+                        mask[int(k), 0] = 1.0
+                        vals[int(k), 0] = v
+                    y = torch.FloatTensor(vals).flatten()
+                    #print(y)
+                    data = Data(R=pos, Z=z, atom_y=y, mask=torch.FloatTensor(mask).view(-1), N=N_, idx=int(name))
+                    #print(data)
+
+                    if self.pre_filter is not None and not self.pre_filter(data):
+                        continue
+                    data_edge = self.pre_transform(data, edge_version="cutoff", do_sort_edge=True, cal_efg=False,
+                                         cutoff=10.0, boundary_factor=100., use_center=True, mol=None, cal_3body_term=False,
+                                         bond_atom_sep=False, record_long_range=True)
+                    #print(data_edge[0].keys())
+                    data_list.append(data_edge)
+                #if i > 10:
+            #    break
+
+        torch.save(self.collate(data_list), self.processed_paths[0])
+#---------------------------------------------PhysNet_NMR------------------------------------------------
 
 #---------------------------------------------QM9-NMR------------------------------------------------
 class QM9_nmr(InMemoryDataset):

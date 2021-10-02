@@ -159,13 +159,14 @@ def main():
                     #print(smi, id_, file)
                     if not this_dic['physnet']:
                         molgraphs = {}
-                    mol = Chem.MolFromSmiles(smi)
-                    mol_smi = Chem.AddHs(mol)
-                    #mol = getMol(file, id_)
+                    #mol = Chem.MolFromSmiles(smi)
+                    #mol_smi = mol = Chem.AddHs(mol)
+                    mol = getMol(file, int(id_))
 
                     if not this_dic['physnet']:
                         mol_graph = MolGraph(mol, args.usePeriodics, this_dic['model'])
-                        molgraphs['x'] = torch.FloatTensor(mol_graph.f_atoms)
+                        if not this_dic['ACSF']:
+                            molgraphs['x'] = torch.FloatTensor(mol_graph.f_atoms)
 
                     if this_dic['ACSF'] and not this_dic['physnet']:
                         if file in ['pubchem', 'zinc']:
@@ -210,7 +211,7 @@ def main():
                             molgraphs['b2a'] = mol_graph.b2a
                             molgraphs['b2revb'] = mol_graph.b2revb
                     else: # for physnet 
-                        mol_sdf = getMol(file, int(id_)) # get mol object from sdf files
+                        mol_sdf = mol # get mol object from sdf files
                         assert mol_smi.GetNumAtoms() == mol_sdf.GetNumAtoms()
                         examples[file+'_'+str(int(id_))] = [mol_sdf, value]
 
@@ -236,20 +237,20 @@ def main():
                                 g2_params=[[1, 1], [1, 2], [1, 3]],
                                 g4_params=[[1, 1, 1], [1, 2, 1], [1, 1, -1], [1, 2, -1]],)
                 for smi, value, id_, file in zip(all_data['QM_SMILES'], all_data['calcLogP'], all_data['ID'], all_data['SourceFile']):
-                    molgraphs = {}
-                    mol = Chem.MolFromSmiles(smi)
-                    mol = Chem.AddHs(mol)
-                    
+                    if not this_dic['physnet']:
+                        molgraphs = {}
+                    #mol = Chem.MolFromSmiles(smi)
+                    #mol_smi = mol = Chem.AddHs(mol)
+                    mol = getMol(file, int(id_))
 
-                    if not this_dic['ACSF']:
+                    if not this_dic['physnet']:
                         mol_graph = MolGraph(mol, args.usePeriodics, this_dic['model'])
-                        molgraphs['x'] = torch.FloatTensor(mol_graph.f_atoms)
-                    else: # ACSF
-                        mol_graph = MolGraph(mol, args.usePeriodics, this_dic['model'])
+                        if not this_dic['ACSF']:
+                            molgraphs['x'] = torch.FloatTensor(mol_graph.f_atoms)
 
-                    if this_dic['ACSF']:
+                    if this_dic['ACSF'] and not this_dic['physnet']:
                         if file in ['pubchem', 'zinc']:
-                            path_to_xyz = '/ext3/Frag20/less_than_10/xyz' # path to the singularity file overlay-50G-10M.ext3
+                            path_to_xyz = '/ext3/Frag20/lessthan10/xyz' # path to the singularity file overlay-50G-10M.ext3
                         else:
                             path_to_xyz = '/ext3/Frag20/{}/xyz'.format(file)
                         file_id = file +'_' + str(int(id_)) # such as 'pubchem_100001'
@@ -271,7 +272,7 @@ def main():
                     molgraphs['edge_attr'] = torch.FloatTensor(mol_graph.f_bonds)
                     molgraphs['edge_index'] = torch.LongTensor(np.concatenate([mol_graph.at_begin, mol_graph.at_end]).reshape(2,-1))
                     if this_dic['task'] == 'single':
-                        molgraphs['mol_sol_logp'] = torch.FloatTensor([value])
+                        molgraphs['mol_sol_wat'] = torch.FloatTensor([value]) # change later because inconvienece in dataProcess.py 
                     if this_dic['task'] == 'multi': #TODO
                         molgraphs['mol_gas'] = torch.FloatTensor([value[1][0]]) # unit is eV, substracting the atom reference energy 
                         molgraphs['mol_wat'] = torch.FloatTensor([value[1][1]]) # unit is eV, substracting the atom reference energy 
@@ -641,8 +642,8 @@ def main():
                         # rule out some compounds 
                         if not Chem.MolFromSmiles(smi): # be careful with this. 
                             continue 
-                        if not set([atom.GetSymbol() for atom in Chem.MolFromSmiles(smi).GetAtoms()]) < set(['B', 'Br', 'C', 'Cl', 'F', 'H', 'N', 'O', 'P', 'S']):
-                            continue
+                        #if not set([atom.GetSymbol() for atom in Chem.MolFromSmiles(smi).GetAtoms()]) < set(['B', 'Br', 'C', 'Cl', 'F', 'H', 'N', 'O', 'P', 'S']):
+                        #    continue
                         if not os.path.exists(os.path.join(alldatapath, args.dataset, 'split', args.style, 'sdf', '{}.sdf'.format(idx))):
                             continue
                         

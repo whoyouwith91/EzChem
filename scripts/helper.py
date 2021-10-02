@@ -25,7 +25,7 @@ model_config = ['dataset', 'model', 'gnn_type',  'batch_size', 'emb_dim', 'act_f
              'residual_connect', 'resLayer', 'interaction_simpler', 'weight_regularizer', 'dropout_regularizer', 'gradCam', 'uncertainty', \
                  'uncertaintyMode', 'drop_ratio', 'energy_shift_value', 'energy_scale_value', 'deg_value']
 train_config = ['running_path', 'seed', 'num_tasks', 'propertyLevel', 'test_level', 'optimizer', 'loss', 'metrics', 'lr', 'lr_style', \
-         'epochs', 'early_stopping', 'train_type', 'taskType', 'train_size', 'val_size', 'test_size', \
+         'epochs', 'early_stopping', 'train_type', 'taskType', 'train_size', 'val_size', 'test_size', 'sample', 'sample_size', 'data_seed', \
          'preTrainedPath', 'uncertainty', 'uncertaintyMode', 'swag_start', 'action', 'mask', 'explicit_split', 'bn']
 #VAE_opts = ['vocab_path', 'vocab_name', 'vocab_size', 'numEncoLayers', 'numDecoLayers', 'numEncoders', 'numDecoders', 'varDimen', 'anneal', 'kl_weight', 'anneal_method', 'anneal_epoch']
 ###############################################################################
@@ -458,8 +458,8 @@ def getScaleandShift(config):
             energy_shift = torch.tensor([4.6759105])
             energy_scale = torch.tensor([2.6481516])
     if config['dataset'] in ['sol_calc/ALL/smaller', 'sol_calc/ALL/smaller_18W', 'sol_calc/ALL/smaller_28W', 'sol_calc/ALL/smaller_38W', 'sol_calc/ALL/smaller_48W', 'sol_calc/ALL/smaller_58W']:
-            energy_shift = torch.tensor([-8.596711050283846]) # unit is kcal/mol
-            energy_scale = torch.tensor([5.428582987359422]) # unit is kcal/mol
+            energy_shift = torch.tensor([-0.37722206969568495]) # unit is kcal/mol
+            energy_scale = torch.tensor([0.25533234760965845]) # unit is kcal/mol
     if config['dataset'] in ['logp_calc/ALL/smaller_58W']:
             energy_shift = torch.tensor([0.]) # unit is kcal/mol
             energy_scale = torch.tensor([1.]) # unit is kcal/mol
@@ -481,10 +481,38 @@ def getScaleandShift(config):
             #energy_scale = torch.tensor([0.09535901863588805])
             energy_shift = torch.tensor([-0.09729485081724314])
             energy_scale = torch.tensor([0.09025854835266788])
+    
     config['energy_shift'], config['energy_shift_value'] = energy_shift, energy_shift.item()
     config['energy_scale'], config['energy_scale_value'] = energy_scale, energy_scale.item()
     
     return config
+
+def getScaleandShift_from_scratch(config, loader):
+    # loader: train_loader 
+    train_values = []
+    train_N = []
+    for data in loader:
+        if 'mol_y' in data:
+            train_values.extend(list(data.mol_y.numpy()))
+            train_N.extend(list(data.N.numpy()))
+        elif 'mol_sol_wat' in data:
+            train_values.extend(list(data.mol_sol_wat.numpy()))
+            train_N.extend(list(data.N.numpy()))
+        elif 'atom_y' or 'y' in data and 'mask' in data:
+            # 'atom_y' and 'mask' are in 1-GNN graphs
+            # 'y' and 'mask' are in physnet graphs
+            train_values.extend(list(data.atom_y[data.mask>0].numpy()))
+        else:
+            pass
+    #print(len(train_values), len(train_N))
+    if 'atom_y' or 'y' in data and 'mask' in data:
+        shift, scale = np.mean(train_values), np.std(train_values)
+    else:
+        assert len(train_values) == len(train_N)
+        shift, scale = atom_mean_std(train_values, train_N, range(len(train_values)))
+    config['energy_shift'], config['energy_shift_value'] = torch.tensor([shift]), shift
+    config['energy_scale'], config['energy_scale_value'] = torch.tensor([scale]), scale
+    return config 
 
 def getElements(dataframe):
     assert 'SMILES' in dataframe.columns
