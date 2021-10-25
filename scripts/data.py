@@ -101,7 +101,16 @@ class get_data_loader():
          #dataset = DummyIMDataset(root=self.config['data_path'], dataset_name='processed.pt')
          num_i_2 = None
       else: # 1-GNN
-         if self.config['dataset'] in ['solNMR', 'solALogP', 'sol_calc/ALL/smaller', 'sol_calc/ALL/smaller_18W', 'sol_calc/ALL/smaller_28W', 'sol_calc/ALL/smaller_38W', 'sol_calc/ALL/smaller_48W', 'sol_calc/ALL/smaller_58W']:
+         if self.config['dataset'] in ['solNMR', 'solALogP', 'sol_calc/ALL/smaller', 'sol_calc/ALL/smaller/3cutoff', \
+                                    'sol_calc/ALL/smaller/4cutoff', 'sol_calc/ALL/smaller/5cutoff', \
+                                    'sol_calc/ALL/smaller/6cutoff', 'sol_calc/ALL/smaller/7cutoff', \
+                                    'sol_calc/ALL/smaller/8cutoff', 'sol_calc/ALL/smaller/9cutoff', \
+                                    'sol_calc/ALL/smaller_18W', 'sol_calc/ALL/smaller_28W', \
+                                    'sol_calc/ALL/smaller_38W', 'sol_calc/ALL/smaller_48W', \
+                                    'sol_calc/ALL/smaller_58W', 'sol_calc/ALL/smaller/noHs', \
+                                    'sol_calc/ALL/smaller_58W/6cutoff', 'sol_calc/ALL/smaller_48W/6cutoff', \
+                                    'sol_calc/ALL/smaller_38W/6cutoff', 'sol_calc/ALL/smaller_28W/6cutoff', \
+                                    'sol_calc/ALL/smaller_18W/6cutoff']:
             if self.config['propertyLevel'] == 'multiMol': # for multiple mol properties
                dataset = knnGraph_multi(root=self.config['data_path'])
             if self.config['propertyLevel'] == 'molecule': # naive, only with solvation property
@@ -123,7 +132,7 @@ class get_data_loader():
             if self.config['propertyLevel'] in ['atom', 'atomMol']: #  either for atom property only or atom/mol property 
                dataset = knnGraph_atom(root=self.config['data_path'])
             num_i_2 = None
-         elif self.config['dataset'] in ['qm9/nmr/carbon', 'qm9/nmr/carbon/smaller', 'qm9/nmr/hydrogen', 'nmr/hydrogen', 'nmr/carbon']:
+         elif self.config['dataset'] in ['qm9/nmr/carbon', 'qm9/nmr/carbon/smaller', 'qm9/nmr/hydrogen', 'nmr/hydrogen', 'nmr/carbon', 'frag14/nmr/carbon']:
             dataset = knnGraph_nmr(root=self.config['data_path'])
             num_i_2 = None
          elif self.config['mol_features']:
@@ -131,7 +140,7 @@ class get_data_loader():
          elif self.config['dataset'] == 'solEFGs':
             dataset = knnGraph_solEFGs(root=self.config['data_path'])
             num_i_2 = None
-         else: # for typical other datasets
+         else: # for typical other datasets 
             if self.config['gnn_type'] == 'dmpnn':
                dataset = knnGraph_dmpnn_exp(root=self.config['data_path'])
                num_i_2 = None
@@ -159,7 +168,11 @@ class get_data_loader():
 
       if self.config['sample']:
          random.seed(self.data_seed)
-         train_dataset = train_dataset.index_select(random.sample(range(self.train_size), self.sample_size))
+         if 'freesol/plus' in self.config['dataset']:
+            sample_dataset = train_dataset[502:].index_select(random.sample(range(475), self.sample_size))
+            train_dataset = train_dataset[:502] + sample_dataset
+         else:
+            train_dataset = train_dataset.index_select(random.sample(range(self.train_size), self.sample_size))
 
       if self.config['model'] in ['physnet']:
          if self.config['explicit_split']: # when using fixed data split 

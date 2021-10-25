@@ -114,7 +114,7 @@ class gin_conv():
     def model(self):
         # input: x(-1, emb_dim), edge index 
         # return: x(-1, emb_dim)
-        return GINConv(nn=self.nn, train_eps=True)
+        return GINConv(nn=self.nn, train_eps=True, aggr=self.aggr)
 
 class gine_conv():
     # https://pytorch-geometric.readthedocs.io/en/latest/modules/nn.html#torch_geometric.nn.conv.GINEConv
@@ -128,7 +128,7 @@ class gine_conv():
         # input: x(-1, emb_dim), edge(-1, emb_dim), edge index
         # edge need be converted from initial num bond feature to emb_dim before being fed 
         # return x(-1, emb_dim)
-        return GINEConv(nn=self.nn, train_eps=True)
+        return GINEConv(nn=self.nn, train_eps=True, aggr=self.aggr)
 
 class edge_conv():
     def __init__(self, config):
@@ -154,7 +154,7 @@ class sgat_conv():
         # input: x(-1, emb_dim), edge inex
         # return: x(-1, emb_dim)
         return SuperGATConv(self.emb_dim, int(self.emb_dim/8), heads=8, attention_type='MX',
-                                  edge_sample_ratio=0.8, is_undirected=True)
+                                  edge_sample_ratio=0.8, is_undirected=True, aggr=self.aggr)
 
 class pna_conv():
     # https://pytorch-geometric.readthedocs.io/en/latest/modules/nn.html#torch_geometric.nn.conv.PNAConv
@@ -185,7 +185,7 @@ class nn_conv():
         
     def model(self):
         # input: intial atom/bond features, and edge index
-        return NNConv(in_channels=self.emb_dim, out_channels=self.emb_dim, nn=self.nn)
+        return NNConv(in_channels=self.emb_dim, out_channels=self.emb_dim, nn=self.nn, aggr=self.aggr)
 
 class DMPNN(nn.Module):
     """An :class:`DMPNN` is a message passing neural network for encoding a molecule."""

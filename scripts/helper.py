@@ -30,6 +30,37 @@ train_config = ['running_path', 'seed', 'num_tasks', 'propertyLevel', 'test_leve
 #VAE_opts = ['vocab_path', 'vocab_name', 'vocab_size', 'numEncoLayers', 'numDecoLayers', 'numEncoders', 'numDecoders', 'varDimen', 'anneal', 'kl_weight', 'anneal_method', 'anneal_epoch']
 ###############################################################################
 
+####
+large_datasets = ['mp', 'mp_drugs', 'xlogp3', 'calcLogP/ALL', 'sol_calc/ALL/smaller_18W', \
+             'sol_calc/ALL/smaller_28W', 'sol_calc/ALL/smaller_38W', 'sol_calc/ALL/smaller_48W', 'sol_calc/ALL/smaller_58W', \
+             'sol_calc/ALL/smaller_18W/6cutoff', 'sol_calc/ALL/smaller_28W/6cutoff', 'sol_calc/ALL/smaller_38W/6cutoff', \
+             'sol_calc/ALL/smaller_48W/6cutoff', 'sol_calc/ALL/smaller_58W/6cutoff', \
+             'solOct_calc/ALL', 'solWithWater_calc/ALL', 'solOctWithWater_calc/ALL', 'calcLogPWithWater/ALL', \
+                 'qm9/nmr/carbon', 'qm9/nmr/hydrogen', 'qm9/nmr/allAtoms', 'calcSolLogP/ALL', 'nmr/carbon', 'nmr/hydrogen', 'solEFGs']
+###
+
+def getTaskType(config):
+    if config['dataset'] == 'calcSolLogP/ALL':
+       config['taskType'] = 'multi'
+       config['num_tasks'] = 3
+    elif config['dataset'] in ['solNMR', 'solALogP', 'qm9/nmr/allAtoms']:
+        if config['propertyLevel'] == 'atomMol':
+            config['num_tasks'] = 2
+            config['taskType'] = 'multi'  
+        elif config['propertyLevel'] == 'multiMol':
+            config['num_tasks'] = 3
+            config['taskType'] = 'multi'
+        elif config['propertyLevel'] == 'atomMultiMol':
+            config['num_tasks'] = 4
+            config['taskType'] = 'multi'
+        else:
+            config['num_tasks'] = 1
+            config['taskType'] = 'single' 
+    else:
+        config['taskType'] = 'single'
+    
+    return config
+
 def set_seed(seed):
 # define seeds for training 
     torch.manual_seed(seed)
@@ -414,78 +445,6 @@ def getDegreeforPNA(loader):
         deg += torch.bincount(d, minlength=deg.numel())
     return deg, str(list(deg.numpy()))
 
-def getScaleandShift(config):
-    if config['dataset'] in ['pka/dataWarrior/acidic']:
-            energy_shift = torch.tensor([0.3268184327923009]) # statistics over all compounds in train set after ACSF, unit is kcal.mol
-            energy_scale = torch.tensor([0.23321891601867273]) # statistics over all compounds in train set after ACSF, unit is kcal.mol
-    if config['dataset'] in ['pka/dataWarrior/basic']:
-            #energy_shift = torch.tensor([0.])
-            #energy_scale = torch.tensor([1.])
-            energy_shift = torch.tensor([0.26469873653415377]) # statistics over all compounds in train set after ACSF, unit is kcal.mol
-            energy_scale = torch.tensor([0.19022209195036874]) # statistics over all compounds in train set after ACSF, unit is kcal.mol
-    if config['dataset'] in ['deepchem/freesol']:
-            #energy_shift = torch.tensor([-0.448323499821181]) # statistics over all compounds in train set before ACSF unit is kcal/mol
-            #energy_scale = torch.tensor([0.5231881290032624]) # statistics over all compounds in train set before ACSF, unit is kcal/mol
-            energy_shift = torch.tensor([-0.22380834618774426]) # statistics over all compounds in train set after ACSF, unit is kcal.mol
-            energy_scale = torch.tensor([0.2554506303590151]) # statistics over all compounds in train set after ACSF, unit is kcal.mol
-    if config['dataset'] in ['deepchem/delaney']:
-            #energy_shift = torch.tensor([-0.12582392787107535])
-            #energy_scale = torch.tensor([0.09535901863588805])
-            energy_shift = torch.tensor([-0.1239565706960962])
-            energy_scale = torch.tensor([0.09412915806545324])
-    if config['dataset'] in ['deepchem/logp']:
-            energy_shift = torch.tensor([0.04861841981877047])
-            energy_scale = torch.tensor([0.03197769536926355])
-    if config['dataset'] in ['mp/bradley']:
-            energy_shift = torch.tensor([2.6049698263964354])
-            energy_scale = torch.tensor([5.931774882494167])
-    if config['dataset'] in ['qm9/nmr/allAtoms']: # loading physnet params
-            energy_shift = torch.tensor([67.2858])
-            energy_scale = torch.tensor([85.8406])
-    if config['dataset'] in ['qm9/nmr/carbon']: # loading physnet params
-            energy_shift = torch.tensor([115.9782138561384])
-            energy_scale = torch.tensor([51.569003335315905])
-    if config['dataset'] in ['qm9/nmr/hydrogen']: # loading physnet params
-            energy_shift = torch.tensor([29.08285732440852])
-            energy_scale = torch.tensor([1.9575037908857158])
-    if config['dataset'] in ['qm9/u0', 'qm9/allAtoms']:
-            energy_shift = torch.tensor([-4.1164152221029555])
-            energy_scale = torch.tensor([0.9008408776783313])
-    if config['dataset'] in ['nmr/carbon']:
-            energy_shift = torch.tensor([98.23851013183594])
-            energy_scale = torch.tensor([51.27542495727539])
-    if config['dataset'] in ['nmr/hydrogen']:
-            energy_shift = torch.tensor([4.6759105])
-            energy_scale = torch.tensor([2.6481516])
-    if config['dataset'] in ['sol_calc/ALL/smaller', 'sol_calc/ALL/smaller_18W', 'sol_calc/ALL/smaller_28W', 'sol_calc/ALL/smaller_38W', 'sol_calc/ALL/smaller_48W', 'sol_calc/ALL/smaller_58W']:
-            energy_shift = torch.tensor([-0.37722206969568495]) # unit is kcal/mol
-            energy_scale = torch.tensor([0.25533234760965845]) # unit is kcal/mol
-    if config['dataset'] in ['logp_calc/ALL/smaller_58W']:
-            energy_shift = torch.tensor([0.]) # unit is kcal/mol
-            energy_scale = torch.tensor([1.]) # unit is kcal/mol
-    if config['dataset'] in ['solALogP', 'solNMR']:
-            if config['propertyLevel'] == 'multiMol':
-                energy_shift = torch.tensor([-4.232369738478913]) # eV for smaller gas energy
-                energy_scale = torch.tensor([0.3176761953853432]) # eV for smaller gas energy 
-            elif config['propertyLevel'] in ['molecule', 'atomMol']:
-                energy_shift = torch.tensor([-0.016289007907758023]) # eV for smaller solvation 
-                energy_scale = torch.tensor([0.011774938538003136]) # eV for smaller solvation 
-            elif config['propertyLevel'] == 'atom':
-                energy_shift = torch.tensor([75.4205])
-                energy_scale = torch.tensor([151.0311])
-            else:
-                energy_shift = torch.tensor([0.])
-                energy_scale = torch.tensor([1.])
-    if config['dataset'] in ['secSolu/set1', 'secSolu/set2']:
-            #energy_shift = torch.tensor([-0.12582392787107535])
-            #energy_scale = torch.tensor([0.09535901863588805])
-            energy_shift = torch.tensor([-0.09729485081724314])
-            energy_scale = torch.tensor([0.09025854835266788])
-    
-    config['energy_shift'], config['energy_shift_value'] = energy_shift, energy_shift.item()
-    config['energy_scale'], config['energy_scale_value'] = energy_scale, energy_scale.item()
-    
-    return config
 
 def getScaleandShift_from_scratch(config, loader):
     # loader: train_loader 
@@ -505,8 +464,8 @@ def getScaleandShift_from_scratch(config, loader):
         else:
             pass
     #print(len(train_values), len(train_N))
-    if 'atom_y' or 'y' in data and 'mask' in data:
-        shift, scale = np.mean(train_values), np.std(train_values)
+    if 'atom_y' in data or 'y' in data and 'mask' in data:
+        shift, scale = np.mean(train_values).item(), np.std(train_values).item()
     else:
         assert len(train_values) == len(train_N)
         shift, scale = atom_mean_std(train_values, train_N, range(len(train_values)))

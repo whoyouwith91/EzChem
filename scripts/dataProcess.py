@@ -150,9 +150,9 @@ class knnGraph(InMemoryDataset):
                 edge_attr=d['edge_attr'],
                 mol_y=d['mol_y'],
                 Z=d['Z'],
-                N=d['N']
+                N=d['N'],
                 #smiles=d['smiles'],
-                #ids=d['id']
+                ids=d['id']
                 ) for d in raw_data_list
         ]
 

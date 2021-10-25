@@ -34,7 +34,6 @@ def main():
     this_dic['train_size'], this_dic['val_size'] = int(dataSizes[args.dataset]['train_size']), int(dataSizes[args.dataset]['val_size'])
 
     # ------------------------------------load processed data-----------------------------------------------------------------------------
-    this_dic['data_path'] = os.path.join(args.allDataPath, args.dataset, 'graphs', args.style, args.model)
     loader = get_data_loader(this_dic)
     train_loader, val_loader, test_loader, num_atom_features, num_bond_features, _ = loader.train_loader, loader.val_loader, loader.test_loader, loader.num_features, loader.num_bond_features, loader.num_i_2
     this_dic['num_atom_features'], this_dic['num_bond_features'] = int(num_atom_features), num_bond_features
@@ -80,11 +79,12 @@ def main():
     # save out all input parameters 
     saveConfig(this_dic, name='config.json')
     
-    # ----------------------------------------training parts----------------------------------------------------------------------------
+    # ----------------------------------------test parts----------------------------------------------------------------------------
     if args.model in ['physnet']: 
         model_ = model.type(floating_type).to(device)
     else:
         model_ = model.to(device)
+    model_.eval() # Testing 
     
     if args.optimizer == 'EMA': # only for physnet
         shadow_model = get_model(this_dic).to(device)

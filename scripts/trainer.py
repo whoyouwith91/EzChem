@@ -6,58 +6,15 @@ from utils_functions import floating_type
 
 def train_model(config):
     if config['model'] in ['physnet']:
-        return train_physnet
+        return train
     else:
         return train
 
 def test_model(config):
     if config['model'] in ['physnet']:
-        return test_physnet
+        return test
     else:
         return test
-
-def cv_train(config, table):
-    results = []
-
-    for seed in [1, 13, 31]:
-        #config['data_path'] = os.path.join(config['cv_path'], 'cv_'+str(i)+'/')
-        #print(config)
-        #print(config['data_path'])   
-        set_seed(seed)
-        device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
-        config['device'] = device
-
-        loader = get_data_loader(config)
-        train_loader, val_loader, _, std, num_features, num_bond_features, num_i_2 = loader.train_loader, loader.val_loader, loader.test_loader, loader.std, loader.num_features, loader.num_bond_features, loader.num_i_2
-        config['num_features'], config['num_bond_features'], config['num_i_2'], config['std'] = int(num_features), num_bond_features, num_i_2, std 
-
-        model = get_model(config)
-        args = objectview(config)
-        model_ = model.to(device)
-        #num_params = param_count(model_)
-        
-        optimizer = get_optimizer(config['optimizer'], model_)
-        if this_dic['lr_style'] == 'decay':
-            scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, factor=0.9, patience=5, min_lr=0.00001)
-        if this_dic['uncertainty']:
-            optimizer = torchcontrib.optim.SWA(optimizer)
-
-        for _ in range(1, config['epochs']):
-            val_res, tst_res = []
-            loss = train(model_, optimizer, train_loader, config)
-            val_error = test(model_, val_loader, config)
-            tst_error = test(model_, test_loader, config)
-            val_res.append(val_error)
-            tst_res.append(tst_error)
-        
-        results.append(tst_res[val_res.index(min(val_res))])
-    
-    table.add_row([config['emb_dim'], config['num_layer'], config['NumOutLayers'], config['lr'], config['batch_size'], np.mean(results), np.std(results)])
-    print(table)
-    sys.stdout.flush()
-    print('\n')
-    sys.stdout.flush()
-    return np.average(results)
 
 def train(model, optimizer, dataloader, config, scheduler=None):
     '''
@@ -76,7 +33,14 @@ def train(model, optimizer, dataloader, config, scheduler=None):
         optimizer.zero_grad()
         y = model(data) # y contains different outputs depending on the # of tasks
         
-        if config['dataset'] in ['solNMR', 'solALogP', 'qm9/nmr/allAtoms', 'sol_calc/ALL/smaller', 'sol_calc/ALL/smaller_18W', 'sol_calc/ALL/smaller_28W', 'sol_calc/ALL/smaller_38W', 'sol_calc/ALL/smaller_48W', 'sol_calc/ALL/smaller_58W', 'logp_calc/ALL/smaller_58W', 'logp_calc/ALL/smaller']:
+        if config['dataset'] in ['solNMR', 'solALogP', 'qm9/nmr/allAtoms', 'sol_calc/ALL/smaller', 'sol_calc/ALL/smaller_18W', \
+                                    'sol_calc/ALL/smaller_28W', 'sol_calc/ALL/smaller_38W', 'sol_calc/ALL/smaller_48W', \
+                                    'sol_calc/ALL/smaller_58W', 'logp_calc/ALL/smaller_58W', 'logp_calc/ALL/smaller', \
+                                    'sol_calc/ALL/smaller/3cutoff', 'sol_calc/ALL/smaller/4cutoff', 'sol_calc/ALL/smaller/5cutoff', \
+                                    'sol_calc/ALL/smaller/6cutoff', 'sol_calc/ALL/smaller/7cutoff', 'sol_calc/ALL/smaller/8cutoff', \
+                                    'sol_calc/ALL/smaller/9cutoff', 'sol_calc/ALL/smaller/noHs', 'sol_calc/ALL/smaller_58W/6cutoff', \
+                                    'sol_calc/ALL/smaller_48W/6cutoff', 'sol_calc/ALL/smaller_38W/6cutoff', 'sol_calc/ALL/smaller_28W/6cutoff', \
+                                    'sol_calc/ALL/smaller_18W/6cutoff']:
             if config['propertyLevel'] == 'molecule': # single task on regression
                 assert config['taskType'] == 'single'
                 loss = get_loss_fn(config['loss'])(y[1], data.mol_sol_wat)
@@ -125,6 +89,15 @@ def train(model, optimizer, dataloader, config, scheduler=None):
                 labels.append(data['atom_y'].detach().data.cpu().numpy())
             else:
                 raise "LossError"
+        
+        elif config['dataset'] in ['nmr/carbon', 'nmr/hydrogen', 'qm9/nmr/carbon', 'qm9/nmr/hydrogen', 'frag14/nmr/carbon']:
+            assert config['propertyLevel'] == 'atom'
+            if config['model'] == 'physnet':
+                loss = get_loss_fn(config['loss'])(data.atom_y[data.mask>0], y['atom_prop'].float().view(-1)[data.mask>0])
+            else:
+                loss = get_loss_fn(config['loss'])(data.atom_y[data.mask>0], y[0].view(-1)[data.mask>0])
+            all_atoms += data.mask.sum() # with mask information
+            all_loss += loss.item()*data.mask.sum()
         
         else: 
             if config['propertyLevel'] == 'molecule': # for single task, like exp solvation, solubility, ect
@@ -179,7 +152,14 @@ def test(model, dataloader, config):
             data = data.to(config['device'])
             y = model(data)
 
-            if config['dataset'] in ['solNMR', 'solALogP', 'qm9/nmr/allAtoms', 'sol_calc/ALL/smaller', 'sol_calc/ALL/smaller_18W', 'sol_calc/ALL/smaller_28W', 'sol_calc/ALL/smaller_38W', 'sol_calc/ALL/smaller_48W', 'sol_calc/ALL/smaller_58W', 'logp_calc/ALL/smaller_58W', 'logp_calc/ALL/smaller']:
+            if config['dataset'] in ['solNMR', 'solALogP', 'qm9/nmr/allAtoms', 'sol_calc/ALL/smaller', 'sol_calc/ALL/smaller_18W', \
+                                    'sol_calc/ALL/smaller_28W', 'sol_calc/ALL/smaller_38W', 'sol_calc/ALL/smaller_48W', \
+                                    'sol_calc/ALL/smaller_58W', 'logp_calc/ALL/smaller_58W', 'logp_calc/ALL/smaller', \
+                                    'sol_calc/ALL/smaller/3cutoff', 'sol_calc/ALL/smaller/4cutoff', 'sol_calc/ALL/smaller/5cutoff', \
+                                    'sol_calc/ALL/smaller/6cutoff', 'sol_calc/ALL/smaller/7cutoff', 'sol_calc/ALL/smaller/8cutoff', \
+                                    'sol_calc/ALL/smaller/9cutoff', 'sol_calc/ALL/smaller/noHs', 'sol_calc/ALL/smaller_58W/6cutoff', \
+                                    'sol_calc/ALL/smaller_48W/6cutoff', 'sol_calc/ALL/smaller_38W/6cutoff', 'sol_calc/ALL/smaller_28W/6cutoff', \
+                                    'sol_calc/ALL/smaller_18W/6cutoff']:
                 if config['test_level'] == 'molecule': # the metrics on single task, currently on solvation energy only
                     if config['propertyLevel'] == 'multiMol':
                         pred = y[3]
@@ -205,7 +185,15 @@ def test(model, dataloader, config):
                     labels.append(data['atom_y'].detach().data.cpu().numpy())
                 else:
                     raise "MetricsError"
-
+            
+            elif config['dataset'] in ['nmr/carbon', 'nmr/hydrogen', 'qm9/nmr/carbon', 'qm9/nmr/hydrogen', 'frag14/nmr/carbon']:
+                assert config['test_level'] == 'atom'
+                if config['model'] == 'physnet':
+                    error += get_metrics_fn(config['metrics'])(data.atom_y[data.mask>0], y['atom_prop'].float().view(-1)[data.mask>0])*data.mask.sum().item()
+                else:
+                    error += get_metrics_fn(config['metrics'])(data.atom_y[data.mask>0], y[0].view(-1)[data.mask>0])*data.mask.sum().item()
+                total_N += data.mask.sum().item()
+            
             else: 
                 if config['test_level'] == 'molecule':
                     if config['gnn_type'] == 'dmpnn':
@@ -266,73 +254,6 @@ def train_dropout(model, optimizer, dataloader, config):
     if config['uncertainty'] == 'epistemic': # todo
         return loss_all/num, rmse, None, None, None
 
-def train_unsuper(model, optimizer, dataloader, config):
-    model.train()
-    loss_all = 0
-
-    for i, data in enumerate(dataloader):
-        recon_batch = model(data)
-        loss = get_loss_fn(config['loss'])(recon_batch.contiguous().view(-1, recon_batch.size(-1)), Variable(data.SRC[:, 1:].contiguous().view(-1,), requires_grad=False), config)
-        
-        loss.backward()
-        print(loss.item())
-        sys.stdout.flush()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), 1)
-        optimizer.step()
-        loss_all += loss.cpu().data.numpy()
-
-    return loss_all/len(dataloader)
-
-def test_unsuper(model, dataloader, config):
-    model.eval()
-
-    epoch_loss = 0
-    with torch.no_grad():
-        for data in dataloader:
-            recon_batch = model(data)
-            loss = get_loss_fn(config['loss'])(recon_batch.contiguous().view(-1, recon_batch.size(-1)), Variable(data.SRC[:, 1:].contiguous().view(-1,), requires_grad=False),  config)
-            epoch_loss += loss.item()
-
-    return epoch_loss / len(dataloader)
-
-def train_VAE(model, optimizer, dataloader, config, epoch, kl_weight=0, preSaveKLweights=None):
-    '''
-    Define loss and backpropagation
-    '''
-    model.train()
-    loss_all = 0
-    
-    if config['anneal']:
-        if config['anneal_method'] == 'warmup':
-           if epoch < config['anneal_epoch']:
-              #kl_weight = kl_anneal_function('linear', step=step_cnt, k1=0.1, k2=0.2, max_value=0.1, x0=100000)
-              kl_weight = 0.
-           else: 
-              kl_weight = 1.
-        elif config['anneal_method'] == 'linear':
-           kl_weight = kl_weight + 0.01
-        elif config['anneal_method'] == 'logistic':
-           kl_weight = float(1 / (1 + 20*np.exp(- 0.1 * (epoch - config['anneal_epoch']))))
-        
-    else:
-        kl_weight = config['kl_weight']
-
-    for i, data in enumerate(dataloader):
-        if config['anneal_method'] == 'cyclical':
-           kl_weight = preSaveKLweights.pop(0)
-        recon_batch, mu, logvar = model(data)
-        loss, CLE, KL = get_loss_fn(config['loss'])(recon_batch.contiguous().view(-1, recon_batch.size(-1)), Variable(data.SRC[:, 1:].contiguous().view(-1,), requires_grad=False), \
-                                           mu.view(-1, config['varDimen']), logvar.view(-1, config['varDimen']), kl_weight, config, saveKL=True)
-        if i % 50 == 0:
-           print(loss.item(), CLE.item(), KL.item(), kl_weight)
-        sys.stdout.flush() 
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), 1)
-        optimizer.step()
-        loss_all += loss.cpu().data.numpy()
-           
-    return loss_all/len(dataloader), kl_weight, preSaveKLweights 
-
 def test_dropout(model, K_test, dataloader, config):
     '''
     Calculate RMSE in dropout net
@@ -377,19 +298,6 @@ def test_dropout(model, K_test, dataloader, config):
     rmse = np.mean((np.mean(means, 0) - np.array(y).squeeze())**2.)**0.5
 
     return loss_all/num, rmse
-
-def test_VAE(model, dataloader, config, kl_weight):
-    model.eval()
-    
-    epoch_loss = 0
-    with torch.no_grad():
-        for data in dataloader:
-            recon_batch, mu, logvar = model(data)
-            loss, _, _ = get_loss_fn(config['loss'])(recon_batch.contiguous().view(-1, recon_batch.size(-1)), Variable(data.SRC[:, 1:].contiguous().view(-1,), requires_grad=False), \
-                                           mu.view(-1, config['varDimen']), logvar.view(-1, config['varDimen']),kl_weight, config)
-            epoch_loss += loss.item()
-        
-    return epoch_loss / len(dataloader)
 
 def test_dropout_uncertainty(model, K_test, dataloader, config):
     model.eval()
