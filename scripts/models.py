@@ -196,8 +196,8 @@ class GNN_1(torch.nn.Module):
 
         self.gnn = GNN(config)
         self.outLayers = nn.ModuleList()
-        if self.uncertainty:
-            self.uncertaintyLayers = nn.ModuleList()
+        #if self.uncertainty:
+        #    self.uncertaintyLayers = nn.ModuleList()
         if self.graph_pooling not in ['edge', 'topk', 'sag']: # except for edge pooling, coded here
             self.pool = PoolingFN(config) # after node embedding updating and pooling 
 
@@ -221,19 +221,26 @@ class GNN_1(torch.nn.Module):
             if idx != len(self.fully_connected_layer_sizes):
                 fc = nn.Sequential(Linear(L_in, L_out), activation_func(config), nn.Dropout(config['drop_ratio']))
                 #L_in, L_out = self.outLayers[-1][0].out_features, int(self.outLayers[-1][0].out_features / 2)    
-                if self.uncertainty: # for uncertainty 
-                    self.uncertaintyLayers.append(NNDropout(weight_regularizer=self.weight_regularizer, dropout_regularizer=self.dropout_regularizer)) 
+                #if self.uncertainty: # for uncertainty 
+                #    self.uncertaintyLayers.append(NNDropout(weight_regularizer=self.weight_regularizer, dropout_regularizer=self.dropout_regularizer)) 
+                self.outLayers.append(fc)
             else:
-                fc = nn.Sequential(Linear(L_in, L_out), nn.Dropout(config['drop_ratio']))
-                last_fc = fc
-            self.outLayers.append(fc)
-        #if self.propertyLevel == 'atomMol':
-        #    self.outLayers1 = copy.deepcopy(self.outLayers) # another trainable linear layers
-
-        if self.uncertaintyMode == 'epistemic': 
-            self.drop_mu = NNDropout(weight_regularizer=self.weight_regularizer, dropout_regularizer=self.dropout_regularizer) # working on last layer
-        if self.uncertaintyMode == 'aleatoric': # 
-            self.outLayers.append(last_fc) 
+                if self.uncertainty:
+                    if self.uncertaintyMode == 'aleatoric':
+                        fc_mean = nn.Sequential(Linear(L_in, L_out), nn.Dropout(config['drop_ratio']))
+                        fc_var = nn.Sequential(Linear(L_in, L_out), nn.Dropout(config['drop_ratio']))
+                        self.outLayers.append(fc_mean)
+                        self.outLayers.append(fc_var)
+                    elif self.uncertaintyMode == 'evidence':
+                        L_out = 4 * self.num_tasks
+                        fc = nn.Sequential(Linear(L_in, L_out), nn.Dropout(config['drop_ratio']))
+                        self.outLayers.append(fc)
+                    else:
+                        pass
+                else:
+                    fc = nn.Sequential(Linear(L_in, L_out), nn.Dropout(config['drop_ratio']))
+                    self.outLayers.append(fc)
+                    
         if self.config['normalize']:
             shift_matrix = torch.zeros(self.emb_dim, 1)
             scale_matrix = torch.zeros(self.emb_dim, 1).fill_(1.0)
@@ -299,7 +306,7 @@ class GNN_1(torch.nn.Module):
             #if self.dataset == 'solNMR' and self.propertyLevel == 'atomMol':
             #    for layer in self.outLayers1:
             #        node_representation = layer(node_representation)
-            if self.num_tasks > 1:
+            if self.num_tasks > 1 and self.dataset not in ['bbbp']: # bbbp is different from mixing of atom-level and mol-level properties
                 if self.dataset in ['solNMR', 'solALogP', 'qm9/nmr/allAtoms']:
                     assert MolEmbed.size(-1) == self.num_tasks
                     if self.propertyLevel == 'atomMol':
@@ -327,25 +334,64 @@ class GNN_1(torch.nn.Module):
                     return MolEmbed, None
             elif self.propertyLevel == 'atom' and self.dataset not in ['solNMR', 'solALogP', 'qm9/nmr/allAtoms']:
                 return MolEmbed.view(-1,1), None
+            
             elif self.propertyLevel == 'molecule' and self.graph_pooling == 'atomic':
                 if self.gnn_type == 'dmpnn':
                     return MolEmbed.view(-1), self.pool(MolEmbed, a_scope).view(-1)
                 else:
                     return MolEmbed.view(-1), global_add_pool(MolEmbed, batch).view(-1)
+            
+            elif self.dataset in ['bbbp']: # classifications 
+                return None, MolEmbed #
+            
             else:
                 return MolEmbed.view(-1), MolEmbed.view(-1)
             
         # for uncertainty analysis
         else:
-            for layer, drop in zip(self.outLayers[1:-1], self.uncertaintyLayers):
-                x, _ = drop(MolEmbed, layer)
-            if self.config['uncertainty'] == 'epistemic':
-                mean, regularization[-1] = self.drop_mu(x, self.outLayers[-1])
-                return mean.squeeze()
-            if self.config['uncertainty'] == 'aleatoric':
-                mean = self.outLayers[-2](x)
-                log_var = self.outLayers[-1](x)
-                return mean, log_var
+            #assert len(self.outLayers) == 4
+            #assert self.pool not in ['conv', 'edge', 'atomic']
+            if self.uncertaintyMode == 'aleatoric':
+                for layer in self.outLayers[:-2]: # 
+                    MolEmbed = layer(MolEmbed)
+                if self.config['normalize']:
+                    MolEmbed = self.scale[Z, :] * MolEmbed + self.shift[Z, :]
+                MolEmbed_mean = self.outLayers[-2](MolEmbed)
+                MolEmbed_log_var = self.outLayers[-1](MolEmbed)
+
+                if self.propertyLevel == 'atom':
+                    return (MolEmbed_mean.view(-1,1), MolEmbed_log_var.view(-1,1), None)
+                
+                elif self.propertyLevel == 'molecule' and self.graph_pooling == 'atomic':
+                    if self.gnn_type == 'dmpnn':
+                        return (None, self.pool(MolEmbed_mean, a_scope).view(-1), self.pool(MolEmbed_log_var, a_scope).view(-1))
+                    else:
+                        return (None, global_add_pool(MolEmbed_mean, batch).view(-1), global_add_pool(MolEmbed_log_var, batch).view(-1))
+                
+                else: # molecule level but not atomic pooling 
+                    return (None, MolEmbed_mean.view(-1), MolEmbed_log_var.view(-1))
+            
+            if self.uncertaintyMode == 'evidence':
+                for layer in self.outLayers: # 
+                    MolEmbed = layer(MolEmbed)
+                min_val = 1e-6
+                # Split the outputs into the four distribution parameters
+                means, loglambdas, logalphas, logbetas = torch.split(MolEmbed, MolEmbed.shape[1]//4, dim=1)
+                if self.config['normalize']:
+                    means = self.scale[Z, :] * means + self.shift[Z, :]
+                    #means = global_add_pool(means, batch)
+                lambdas = torch.nn.Softplus()(loglambdas) + min_val
+                alphas = torch.nn.Softplus()(logalphas) + min_val + 1  # add 1 for numerical contraints of Gamma function
+                betas = torch.nn.Softplus()(logbetas) + min_val
+                
+                if self.graph_pooling == 'atomic':
+                    means = global_add_pool(means, batch)
+                    lambdas = global_add_pool(lambdas, batch)
+                    alphas = global_add_pool(alphas, batch)
+                    betas = global_add_pool(betas, batch)
+
+                return torch.stack((means, lambdas, alphas, betas),
+                                         dim = -1).view(-1,4)
 
 class GNN_1_2(torch.nn.Module):
     def __init__(self, config):

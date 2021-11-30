@@ -498,14 +498,16 @@ class physnet(InMemoryDataset):
                 atomic_number.append(atom.GetAtomicNum())
             z = torch.tensor(atomic_number, dtype=torch.long)
             
-            #mask = np.zeros((N, 1), dtype=np.float32)
-            #vals = np.zeros((N, 1), dtype=np.float32)
-            #for k,v in enumerate(value[0][2]):
-            #    mask[int(k), 0] = 1.0
-            #    vals[int(k), 0] = v
-            mol_y = torch.FloatTensor([value[1]]).flatten()
-            #atom_y = torch.FloatTensor(value[0][2]).flatten()
-            data = Data(R=pos, Z=z, mol_sol_wat=mol_y, N=N_)
+            mask = np.zeros((N, 1), dtype=np.float32)
+            vals = np.zeros((N, 1), dtype=np.float32)
+            for k,v in value[1][0].items():
+                mask[int(k), 0] = 1.0
+                vals[int(k), 0] = v
+            #mol_y = torch.FloatTensor([value[1]]).flatten() #for calculated solvation energy
+            #data = Data(R=pos, Z=z, mol_sol_wat=mol_y, N=N_) # for calculated solvation energy
+            atom_y = torch.FloatTensor(vals).flatten()
+            mask = torch.FloatTensor(mask).flatten()
+            data = Data(R=pos, Z=z, atom_y=atom_y, N=N_, mask=mask) # for calculated solvation energy
 
             if self.pre_filter is not None and not self.pre_filter(data):
                 continue

@@ -45,7 +45,7 @@ def get_parser():
     parser.add_argument('--preTrainedPath', type=str)
     parser.add_argument('--propertyLevel', type=str, default='molecule')
     parser.add_argument('--test_level', type=str, default='molecule')
-    parser.add_argument('--loss', type=str, choices=['l1', 'l2', 'smooth_l1', 'dropout', 'vae', 'unsuper', 'maskedL1', 'maskedL2', 'class'])
+    parser.add_argument('--loss', type=str, choices=['l1', 'l2', 'smooth_l1', 'aleatoric', 'vae', 'unsuper', 'maskedL1', 'maskedL2', 'class', 'evidence'])
     parser.add_argument('--metrics', type=str, choices=['l1', 'l2', 'class'])
     parser.add_argument('--weights', type=str, choices=['he_norm', 'xavier_norm', 'he_uni', 'xavier_uni'], default='he_uni')
     parser.add_argument('--clip', action='store_true') # clip weights or not
@@ -55,7 +55,6 @@ def get_parser():
     parser.add_argument('--style', type=str, default='base')  # if running CV
     parser.add_argument('--early_stopping', action='store_true')
     parser.add_argument('--experiment', type=str)  # when doing experimenting, name it. 
-    parser.add_argument('--num_tasks', type=int, default=1)
     parser.add_argument('--gradCam', action='store_true')
     parser.add_argument('--tsne', action='store_true')
     parser.add_argument('--uncertainty',  action='store_true')

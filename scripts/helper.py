@@ -36,7 +36,8 @@ large_datasets = ['mp', 'mp_drugs', 'xlogp3', 'calcLogP/ALL', 'sol_calc/ALL/smal
              'sol_calc/ALL/smaller_18W/6cutoff', 'sol_calc/ALL/smaller_28W/6cutoff', 'sol_calc/ALL/smaller_38W/6cutoff', \
              'sol_calc/ALL/smaller_48W/6cutoff', 'sol_calc/ALL/smaller_58W/6cutoff', \
              'solOct_calc/ALL', 'solWithWater_calc/ALL', 'solOctWithWater_calc/ALL', 'calcLogPWithWater/ALL', \
-                 'qm9/nmr/carbon', 'qm9/nmr/hydrogen', 'qm9/nmr/allAtoms', 'calcSolLogP/ALL', 'nmr/carbon', 'nmr/hydrogen', 'solEFGs']
+                 'qm9/nmr/carbon', 'qm9/nmr/hydrogen', 'qm9/nmr/allAtoms', 'calcSolLogP/ALL', 'nmr/carbon', 'nmr/hydrogen', \
+                 'solEFGs', 'frag14/nmr/carbon', 'frag14/nmr/hydrogen']
 ###
 
 def getTaskType(config):
@@ -56,8 +57,12 @@ def getTaskType(config):
         else:
             config['num_tasks'] = 1
             config['taskType'] = 'single' 
+    elif config['dataset'] in ['bbbp']:
+        config['num_tasks'] = 2
+        config['taskType'] = 'single'
     else:
         config['taskType'] = 'single'
+        config['num_tasks'] = 1
     
     return config
 
@@ -73,7 +78,10 @@ def set_seed(seed):
 def get_optimizer(args, model):
     # define optimizers
     if args.optimizer == 'adam':
-        optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+        if args.uncertaintyMode == 'aleatoric':
+            optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=1e-6)
+        else:
+            optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
     if args.optimizer == 'sgd':
         optimizer = torch.optim.SGD(model.parameters(), lr=args.lr, momentum=0.9, weight_decay=1e-4)
     if args.optimizer == 'adamW':
@@ -89,12 +97,48 @@ grad_norm = lambda m: math.sqrt(sum([p.grad.norm().item() ** 2 for p in m.parame
 def count_parameters(model):
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
+def evidential_loss_new(mu, v, alpha, beta, targets, lam=1, epsilon=1e-4):
+    """
+    Use Deep Evidential Regression negative log likelihood loss + evidential
+        regularizer
+
+    :mu: pred mean parameter for NIG
+    :v: pred lam parameter for NIG
+    :alpha: predicted parameter for NIG
+    :beta: Predicted parmaeter for NIG
+    :targets: Outputs to predict
+
+    :return: Loss
+    """
+    # Calculate NLL loss
+    twoBlambda = 2*beta*(1+v)
+    nll = 0.5*torch.log(np.pi/v) \
+        - alpha*torch.log(twoBlambda) \
+        + (alpha+0.5) * torch.log(v*(targets-mu)**2 + twoBlambda) \
+        + torch.lgamma(alpha) \
+        - torch.lgamma(alpha+0.5)
+
+    L_NLL = nll #torch.mean(nll, dim=-1)
+
+    # Calculate regularizer based on absolute error of prediction
+    error = torch.abs((targets - mu))
+    reg = error * (2 * v + alpha)
+    L_REG = reg #torch.mean(reg, dim=-1)
+
+    # Loss = L_NLL + L_REG
+    # TODO If we want to optimize the dual- of the objective use the line below:
+    loss = L_NLL + lam * (L_REG - epsilon)
+
+    return loss.mean()
+    
 def heteroscedastic_loss(true, mean, log_var):
-    '''
-    dropout loss
-    '''
     precision = torch.exp(-log_var)
-    return torch.mean(torch.sum(0.5*precision * (true - mean.reshape(-1,))**2 + 0.5*log_var, 1), 0)
+    #precision = torch.square(-log_var)
+    return torch.mean(0.5*precision * (true - mean)**2 + 0.5*log_var)
+
+def log_normal_nolog(y, mu, std):
+    element_wise =  -(y - mu)**2 / (2*std**2)  - std
+    return element_wise
 
 def unsuper_loss(recon_x, x, config):
     CELoss = F.cross_entropy(recon_x, x, ignore_index=1)
@@ -159,8 +203,10 @@ def get_loss_fn(name):
         return MaskedL1Loss
     if name == 'smooth_l1':
         return F.smooth_l1_loss
-    if name == 'dropout':
+    if name == 'aleatoric':
         return heteroscedastic_loss
+    if name == 'evidence':
+        return evidential_loss_new
     if name == 'vae':
        return vae_loss
     if name == 'unsuper':
@@ -226,16 +272,18 @@ def createResultsFile(this_dic):
     if this_dic['loss'] in ['l1', 'maskedL1']:
         train_header = 'MAE'
     if this_dic['loss'] == 'class':
-        train_header1 = 'Loss'
-        train_header2 = 'Accuracy'
+        #train_header1 = 'Loss'
+        train_header = 'Accuracy'
     if this_dic['metrics'] == 'l2':
         test_header = 'RMSE'
     if this_dic['metrics'] == 'l1':
         test_header = 'MAE'
     if this_dic['metrics'] == 'class':
         test_header = 'Accuracy'
+    if this_dic['uncertainty']:
+        train_header = 'RMSE'
     if this_dic['loss'] == 'class':
-        header = ['Epoch', 'Time', 'LR', 'Train {}'.format(train_header1), 'Train {}'.format(train_header2), 'Valid {}'.format(test_header), 'Test {}'.format(test_header), 'PNorm', 'GNorm']
+        header = ['Epoch', 'Time', 'LR', 'Train {}'.format(train_header), 'Valid {}'.format(test_header), 'Test {}'.format(test_header), 'PNorm', 'GNorm']
     else:
         header = ['Epoch', 'Time', 'LR', 'Train {}'.format(train_header), 'Valid {}'.format(test_header), 'Test {}'.format(test_header), 'PNorm', 'GNorm']
     x = PrettyTable(header)
@@ -343,8 +391,9 @@ def build_lr_scheduler(optimizer, config):
                     min_lr=0.00001)
     
     elif config['scheduler'] == 'step':
+        # gamma = 0.95 is only for naive trial for aleatoric uncertainty training
         return torch.optim.lr_scheduler.StepLR(optimizer, 
-                    620000, gamma=0.1)
+                    step_size=10, gamma=0.95) 
     else:
         return None
 

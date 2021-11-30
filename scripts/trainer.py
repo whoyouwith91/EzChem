@@ -5,14 +5,14 @@ from models import *
 from utils_functions import floating_type
 
 def train_model(config):
-    if config['model'] in ['physnet']:
-        return train
+    if config['uncertainty']:
+        return train_uncertainty
     else:
         return train
 
 def test_model(config):
-    if config['model'] in ['physnet']:
-        return test
+    if config['uncertainty']:
+        return test_uncertainty
     else:
         return test
 
@@ -24,7 +24,7 @@ def train(model, optimizer, dataloader, config, scheduler=None):
     all_loss = 0
     if config['propertyLevel'] == 'atom':
         all_atoms = 0
-    if config['dataset'] == 'solEFGs':
+    if config['dataset'] in ['solEFGs', 'bbbp']:
         preds, labels = [], []
     for data in dataloader:
         data = data.to(config['device'])
@@ -90,7 +90,14 @@ def train(model, optimizer, dataloader, config, scheduler=None):
             else:
                 raise "LossError"
         
-        elif config['dataset'] in ['nmr/carbon', 'nmr/hydrogen', 'qm9/nmr/carbon', 'qm9/nmr/hydrogen', 'frag14/nmr/carbon']:
+        elif config['dataset'] in ['bbbp']:
+            assert config['taskType'] == 'single'
+            loss = get_loss_fn(config['loss'])(y[1], data.mol_y.long())
+            idx = F.log_softmax(model(data)[1], 1).argmax(dim=1)
+            preds.append(idx.detach().data.cpu().numpy())
+            labels.append(data['mol_y'].long().detach().data.cpu().numpy())
+
+        elif config['dataset'] in ['nmr/carbon', 'nmr/hydrogen', 'qm9/nmr/carbon', 'qm9/nmr/hydrogen', 'frag14/nmr/carbon', 'frag14/nmr/hydrogen']:
             assert config['propertyLevel'] == 'atom'
             if config['model'] == 'physnet':
                 loss = get_loss_fn(config['loss'])(data.atom_y[data.mask>0], y['atom_prop'].float().view(-1)[data.mask>0])
@@ -119,22 +126,29 @@ def train(model, optimizer, dataloader, config, scheduler=None):
         if config['clip']:
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.)
         optimizer.step()
-        if config['scheduler'] == 'NoamLR':
-            scheduler.step()
+
+    if config['scheduler'] in ['NoamLR', 'step']:
+        scheduler.step()
     if config['optimizer'] in ['SWA']:
         optimizer.swap_swa_sgd()
     
-    if config['propertyLevel'] == 'atom':
-        if config['dataset'] == 'solEFGs':
-            return loss.item(), get_metrics_fn(config['metrics'])(np.hstack(labels), np.hstack(preds))
-        else:
+    if config['dataset'] in ['solEFGs', 'bbbp']: # classification tasks 
+        return get_metrics_fn(config['metrics'])(np.hstack(labels), np.hstack(preds))
+    
+    if config['metrics'] == 'l2':
+        assert config['test_level'] == 'molecule'
+        return np.sqrt(all_loss / len(dataloader.dataset)) # RMSE for mol level properties.
+    
+    if config['metrics'] == 'l1':
+        if config['test_level'] == 'atom':
             return all_loss.item() / all_atoms.item() # MAE
-    if config['propertyLevel'] == 'molecule':
-        if config['metrics'] == 'l2':
-            return np.sqrt(all_loss / len(dataloader.dataset)) # RMSE
+        elif config['propertyLevel'] in ['multiMol', 'atomMol']:
+            return all_loss.item() / len(dataloader.dataset) * 23 # ev --> kcal/mol
         else:
-            return all_loss / len(dataloader.dataset) # MAE
-    if config['propertyLevel'] in ['atomMol', 'multiMol', 'atomMultiMol']:
+            assert config['test_level'] == 'molecule'
+            return all_loss.item() / len(dataloader.dataset) 
+    
+    if config['propertyLevel'] in ['atomMol', 'multiMol', 'atomMultiMol']: # mixed tasks of single/multi
         return loss.item()
 
 def test(model, dataloader, config):
@@ -145,7 +159,7 @@ def test(model, dataloader, config):
     error = 0
     if config['test_level'] == 'atom':
         total_N = 0
-    if config['dataset'] == 'solEFGs':
+    if config['dataset'] in ['solEFGs', 'bbbp']:
         preds, labels = [], []
     with torch.no_grad():
         for data in dataloader:
@@ -186,7 +200,13 @@ def test(model, dataloader, config):
                 else:
                     raise "MetricsError"
             
-            elif config['dataset'] in ['nmr/carbon', 'nmr/hydrogen', 'qm9/nmr/carbon', 'qm9/nmr/hydrogen', 'frag14/nmr/carbon']:
+            elif config['dataset'] in ['bbbp']:
+                assert config['test_level'] == 'molecule'
+                idx = F.log_softmax(model(data)[1], 1).argmax(dim=1)
+                preds.append(idx.detach().data.cpu().numpy())
+                labels.append(data['mol_y'].long().detach().data.cpu().numpy())
+
+            elif config['dataset'] in ['nmr/carbon', 'nmr/hydrogen', 'qm9/nmr/carbon', 'qm9/nmr/hydrogen', 'frag14/nmr/carbon', 'frag14/nmr/hydrogen']:
                 assert config['test_level'] == 'atom'
                 if config['model'] == 'physnet':
                     error += get_metrics_fn(config['metrics'])(data.atom_y[data.mask>0], y['atom_prop'].float().view(-1)[data.mask>0])*data.mask.sum().item()
@@ -219,28 +239,31 @@ def test(model, dataloader, config):
         if config['metrics'] == 'class':
             return get_metrics_fn(config['metrics'])(np.hstack(labels), np.hstack(preds))
 
-def train_dropout(model, optimizer, dataloader, config):
+def train_uncertainty(model, optimizer, dataloader, config, scheduler=None): 
     model.train()
     all_loss = 0
-    y = []
-    means = []
-    logvars = []
-    num = 0
     for data in dataloader:
-        num += 1
         data = data.to(config['device'])
         optimizer.zero_grad()
 
-        if config['uncertainty'] == 'aleatoric': # data uncertainty
-            mean, log_var, _ = model(data)
-            loss = get_loss_fn(config['loss'])(data.y, mean, log_var)
-            logvars.extend(log_var.cpu().data.numpy())
+        if config['uncertaintyMode'] == 'aleatoric': # data uncertainty
+            _, mean, log_var = model(data)
+            loss = get_loss_fn(config['loss'])(data.mol_y, mean, log_var)
+            #logvars.extend(log_var.item())
 
-        if config['uncertainty'] == 'epistemic': # model uncertainty
+        if config['uncertaintyMode'] == 'epistemic': # model uncertainty
             mean = model(data)
             loss = get_loss_fn(config['loss'])(data.y, mean)
-        y.extend(data.y.cpu().data.numpy())
-        means.extend(mean.cpu().data.numpy())
+        
+        if config['uncertaintyMode'] == 'evidence':
+            preds = model(data)
+            means =  preds[:, [j for j in range(len(preds[0])) if j % 4 == 0]].view(-1,)
+            lambdas =  preds[:, [j for j in range(len(preds[0])) if j % 4 == 1]].view(-1,)
+            alphas =  preds[:, [j for j in range(len(preds[0])) if j % 4 == 2]].view(-1,)
+            betas  =  preds[:, [j for j in range(len(preds[0])) if j % 4 == 3]].view(-1,)
+            loss = get_loss_fn(config['loss'])(means, lambdas, alphas, betas, data.mol_y)
+        #y.extend(data.y.item())
+        #means.extend(mean.item())
         loss.backward()
         
         if config['model'].endswith('dropout'):
@@ -249,55 +272,42 @@ def train_dropout(model, optimizer, dataloader, config):
 
         all_loss += loss.item() * data.num_graphs
 
-    if config['uncertainty'] == 'aleatoric': # todo
-        return np.sqrt(all_loss / len(dataloader.dataset)), rmse, np.array(y), np.array(means), np.array(logvars)
-    if config['uncertainty'] == 'epistemic': # todo
-        return loss_all/num, rmse, None, None, None
+    if config['uncertaintyMode'] == 'aleatoric': # TODO
+        return np.sqrt(all_loss / len(dataloader.dataset)), None, None
+    if config['uncertaintyMode'] == 'epistemic': # TODO
+        return loss_all/num 
 
-def test_dropout(model, K_test, dataloader, config):
+def test_uncertainty(model, dataloader, config):
     '''
     Calculate RMSE in dropout net
     '''
     model.eval()
-    MC_samples = []
-    #y, mean_, var_ = [], [], []
-    loss_all = 0
-    num = 0
+    error = 0
+    #if config['uncertaintyMode'] == 'evidence':
+    #    preds = []
     with torch.no_grad():
-        for _ in range(K_test):
-            y, mean_, var_ = [], [], []
-            for data in dataloader:
-               num += 1 
-               if config['model'] not in ['loopybp', 'wlkernel', 'loopybp_dropout', 'wlkernel_dropout', 'loopybp_swag', 'wlkernel_swag']:
-                  data = data.to(config['device'])
-               if config['model'] in ['loopybp', 'wlkernel', 'loopybp_dropout', 'wlkernel_dropout', 'loopybp_swag', 'wlkernel_swag']:
-                  batchTargets = data.targets()
-                  data = data.batch_graph()
-                  data.y = torch.FloatTensor(batchTargets).to(config['device'])
-                  data.y = data.y.view(-1)
-               if config['uncertainty'] == 'aleatoric':
-                  mean, log_var, regularization = model(data)
-                  loss = get_loss_fn(config['loss'])(data.y, mean, log_var) + regularization
-                  var_.extend(log_var.cpu().data.numpy())
-                  mean_.extend(mean.cpu().data.numpy())
-                  #MC_samples.append([mean_, var_])
-               #mean_batch, var_batch, _ = model(data.to(device))
-               if config['uncertainty'] == 'epistemic':
-                  mean = model(data)
-                  loss = get_loss_fn(config['loss'])(data.y, mean)
-                  mean_.extend(mean.cpu().data.numpy())
-                  #MC_samples.append([mean_])
-               y.extend(data.y.cpu().data.numpy())
-               loss_all += loss.cpu().data.numpy()
-            if config['uncertainty'] == 'aleatoric':
-               MC_samples.append([mean_, var_])
-            if config['uncertainty'] == 'epistemic':
-               MC_samples.append([mean_])
-        means = np.stack([tup[0] for tup in MC_samples]).reshape(K_test, len(mean_))
-    
-    rmse = np.mean((np.mean(means, 0) - np.array(y).squeeze())**2.)**0.5
+        for data in dataloader:
+            data = data.to(config['device'])
+            if config['uncertaintyMode'] == 'aleatoric':
+                _, mean, log_var = model(data)
+                error += get_metrics_fn(config['metrics'])(data.mol_y, mean) * data.num_graphs
+                #var_.extend(log_var.item())
+                #mean_.extend(mean.item())
+                #MC_samples.append([mean_, var_])
+                #mean_batch, var_batch, _ = model(data.to(device))
+            if config['uncertaintyMode'] == 'epistemic':
+                pass
+                #MC_samples.append([mean_])
+            if config['uncertaintyMode'] == 'evidence':
+                preds = model(data)
+                means =  preds[:, [j for j in range(len(preds[0])) if j % 4 == 0]].view(-1,)
+                error += get_metrics_fn(config['metrics'])(data.mol_y, means) * data.num_graphs
+        
+        if config['uncertaintyMode'] == 'aleatoric':
+            return np.sqrt(error.item() / len(dataloader.dataset))
 
-    return loss_all/num, rmse
+        if config['uncertaintyMode'] == 'evidence':
+            return np.sqrt(error.item() / len(dataloader.dataset))
 
 def test_dropout_uncertainty(model, K_test, dataloader, config):
     model.eval()

@@ -20,10 +20,16 @@ class get_data_loader():
       self.name = config['dataset']
       self.model = config['model']
       if config['explicit_split']:
-         all_index = torch.load('/scratch/projects/yzlab/group/temp_sx/qm9_processed/qm9_split.pt')
-         self.train_index = all_index['train_index'].tolist()
-         self.valid_index = all_index['valid_index'].tolist()
-         self.test_index = all_index['test_index'].tolist()
+         if config['dataset'] in ['qm9/u0']:
+            all_index = torch.load('/scratch/projects/yzlab/group/temp_sx/qm9_processed/qm9_split.pt')
+            self.train_index = all_index['train_index'].tolist()
+            self.valid_index = all_index['valid_index'].tolist()
+            self.test_index = all_index['test_index'].tolist()
+         elif config['dataset'] in ['qm9/nmr/carbon']:
+            all_index = torch.load('/scratch/dz1061/gcn/chemGraph/data/qm9/nmr/carbon/split/base/qm9-nmr-split.pt')
+            self.train_index = all_index['train_index']
+            self.valid_index = all_index['valid_index']
+            self.test_index = all_index['test_index']
          self.train_size, self.val_size = config['train_size'], config['val_size']
       else:
          self.train_size, self.val_size = config['train_size'], config['val_size']
@@ -132,7 +138,7 @@ class get_data_loader():
             if self.config['propertyLevel'] in ['atom', 'atomMol']: #  either for atom property only or atom/mol property 
                dataset = knnGraph_atom(root=self.config['data_path'])
             num_i_2 = None
-         elif self.config['dataset'] in ['qm9/nmr/carbon', 'qm9/nmr/carbon/smaller', 'qm9/nmr/hydrogen', 'nmr/hydrogen', 'nmr/carbon', 'frag14/nmr/carbon']:
+         elif self.config['dataset'] in ['qm9/nmr/carbon', 'qm9/nmr/carbon/smaller', 'qm9/nmr/hydrogen', 'nmr/hydrogen', 'nmr/carbon', 'frag14/nmr/carbon', 'frag14/nmr/hydrogen']:
             dataset = knnGraph_nmr(root=self.config['data_path'])
             num_i_2 = None
          elif self.config['mol_features']:

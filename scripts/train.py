@@ -95,8 +95,6 @@ def main():
     else: 
         optimizer = get_optimizer(args, model_)
     scheduler = build_lr_scheduler(optimizer, this_dic)
-    if this_dic['uncertainty']:
-        optimizer = torchcontrib.optim.SWA(optimizer)
     
     best_val_error = float("inf")
     for epoch in range(1, this_dic['epochs']+1):
@@ -139,7 +137,16 @@ def main():
             if args.optimizer == 'EMA': # physnet
                 best_val_error = saveModel(this_dic, epoch, shadow_model, best_val_error, val_error)
             else:
+                if this_dic['loss'] in ['class']:
+                    val_error = 0 - val_error
                 best_val_error = saveModel(this_dic, epoch, model_, best_val_error, val_error) # save model if validation error hits new lower 
+        else: 
+            contents = [epoch, round(time_toc-time_tic, 2), round(lr,7), round(train_error,6),  \
+                round(val_error,6), round(test_error,6), round(param_norm(model_),2), round(grad_norm(model_),2)]
+            results.add_row(contents) # updating pretty table 
+            saveToResultsFile(results, this_dic, name='data.txt') # save instant data to directory
+            best_val_error = saveModel(this_dic, epoch, model_, best_val_error, val_error)
+
         torch.save(model_.state_dict(), os.path.join(this_dic['running_path'], 'trained_model', 'model_last.pt'))
 
 if __name__ == "__main__":
