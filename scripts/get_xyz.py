@@ -44,13 +44,13 @@ def WriteLowestEnergyConformer(mol, conformerPropsDict, f_out):
     MolToXYZFile(mol, f_out, confId=lowest_id)
 
 
-train = pd.read_csv('/scratch/dz1061/gcn/chemGraph/data/deepchem/logp/split/base/train.csv', names=['SMILES', 'target'])
-valid = pd.read_csv('/scratch/dz1061/gcn/chemGraph/data/deepchem/logp/split/base/valid.csv',  names=['SMILES', 'target'])
-test = pd.read_csv('/scratch/dz1061/gcn/chemGraph/data/deepchem/logp/split/base/test.csv',  names=['SMILES', 'target'])
+train = pd.read_csv('/scratch/dz1061/gcn/chemGraph/data/mp/bradley/split/base/train.csv', names=['SMILES', 'target'])
+valid = pd.read_csv('/scratch/dz1061/gcn/chemGraph/data/mp/bradley/split/base/valid.csv',  names=['SMILES', 'target'])
+test = pd.read_csv('/scratch/dz1061/gcn/chemGraph/data/mp/bradley/split/base/test.csv',  names=['SMILES', 'target'])
 
 all_ = pd.concat([train, valid, test])
 
-for id_, smi in zip(range(1458, all_.shape[0]), all_[1458:]['SMILES']):
+for id_, smi in zip(range(all_.shape[0]), all_['SMILES']):
     try:
         #print(smi)
         mol = Chem.MolFromSmiles(smi)
@@ -61,7 +61,7 @@ for id_, smi in zip(range(1458, all_.shape[0]), all_[1458:]['SMILES']):
             # energy minimise (optional) and energy calculation
             props = calc_energy(m, conformerId, minimizeIts=200)
             conformerPropsDict[conformerId] = props
-        WriteLowestEnergyConformer(m, conformerPropsDict, '/scratch/dz1061/gcn/chemGraph/data/deepchem/logp/split/base/MMFFXYZ/{}.xyz'.format(str(id_)))
+        WriteLowestEnergyConformer(m, conformerPropsDict, '/scratch/dz1061/gcn/chemGraph/data/mp/bradley/split/base/MMFFXYZ/{}.xyz'.format(str(id_)))
     except:
         print(id_)
     #break

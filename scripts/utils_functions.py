@@ -15,7 +15,7 @@ from torch_scatter import scatter
 # Constants:
 
 # Coulomb’s constant in eV A and e
-from time_meta import record_data
+#from time_meta import record_data
 
 k_e = 14.399645352
 # Device

@@ -81,7 +81,7 @@ scheduler = build_lr_scheduler(optimizer, config_all)
 
 lr = 0.001
 config_all['loss'] = 'l2'
-config_all['running_path'] = '/scratch/dz1061/gcn/chemGraph/results/qm9/u0/physnet/physnet/TransferLearningFromqm9/nmr/allAtoms/DNN/seed_31'
+config_all['running_path'] = '/scratch/dz1061/gcn/chemGraph/results/qm9/u0/physnet/physnet/TransferLearningFromqm9/nmr/allAtoms/DNN_NoamLR/seed_31'
 if not os.path.exists(os.path.join(config_all['running_path'], 'trained_model/')):
     os.makedirs(os.path.join(config_all['running_path'], 'trained_model/'))
 if not os.path.exists(os.path.join(config_all['running_path'], 'best_model/')):

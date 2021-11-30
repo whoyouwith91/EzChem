@@ -12,7 +12,7 @@ from torch_geometric.data import Data
 from rdkit.Chem.inchi import MolToInchi
 from ase.units import Hartree, eV
 
-from DummyIMDataset import DummyIMDataset
+#from DummyIMDataset import DummyIMDataset
 from utils_functions import cal_edge
 from tqdm import tqdm
 

@@ -1,7 +1,6 @@
-
 physnet_kwargs = {
-        'n_atom_embedding': 95,
-        'n_output': 1, # dimension in last layer
+        'n_atom_embedding': 120,
+        'n_output': 2,
         'n_dime_before_residual': 1,
         'n_dime_after_residual': 2,
         'n_output_dense': 3,
@@ -23,4 +22,5 @@ physnet_kwargs = {
         'target_names': ['NMR_chemical_shift'],
         'requires_embedding': True,
         'requires_atom_prop': True,
+        'get_atom_embedding': False
         }

@@ -126,8 +126,8 @@ def train(model, optimizer, dataloader, config, scheduler=None):
         if config['clip']:
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.)
         optimizer.step()
-
-    if config['scheduler'] in ['NoamLR', 'step']:
+        
+    if config['scheduler'] == 'NoamLR':
         scheduler.step()
     if config['optimizer'] in ['SWA']:
         optimizer.swap_swa_sgd()
@@ -202,6 +202,7 @@ def test(model, dataloader, config):
             
             elif config['dataset'] in ['bbbp']:
                 assert config['test_level'] == 'molecule'
+                loss = get_loss_fn(config['loss'])(y[1], data.mol_y.long())
                 idx = F.log_softmax(model(data)[1], 1).argmax(dim=1)
                 preds.append(idx.detach().data.cpu().numpy())
                 labels.append(data['mol_y'].long().detach().data.cpu().numpy())
