@@ -142,9 +142,13 @@ class get_data_loader():
             dataset = knnGraph_nmr(root=self.config['data_path'])
             num_i_2 = None
          elif self.config['mol_features']:
-            pass
+            dataset = knnGraph_mol(root=self.config['data_path'])
+            num_i_2 = None
          elif self.config['dataset'] == 'solEFGs':
             dataset = knnGraph_solEFGs(root=self.config['data_path'])
+            num_i_2 = None
+         elif self.config['dataset'] == 'pka/chembl':
+            dataset = knnGraph_pka(root=self.config['data_path'])
             num_i_2 = None
          else: # for typical other datasets 
             if self.config['gnn_type'] == 'dmpnn':
@@ -167,6 +171,7 @@ class get_data_loader():
          test_dataset = dataset[self.test_index]
          val_dataset = dataset[self.valid_index]
          train_dataset = dataset[self.train_index]
+
       else:
          test_dataset = dataset[my_split_ratio[0]+my_split_ratio[1]:]
          rest_dataset = dataset[:my_split_ratio[0]+my_split_ratio[1]]
@@ -178,7 +183,8 @@ class get_data_loader():
             sample_dataset = train_dataset[502:].index_select(random.sample(range(475), self.sample_size))
             train_dataset = train_dataset[:502] + sample_dataset
          else:
-            train_dataset = train_dataset.index_select(random.sample(range(self.train_size), self.sample_size))
+            train_dataset = rest_dataset.index_select(random.sample(range(my_split_ratio[0]+my_split_ratio[1]), my_split_ratio[0]))
+            val_dataset = rest_dataset[list(set(rest_dataset.indices()) - set(train_dataset.indices()))]
 
       if self.config['model'] in ['physnet']:
          if self.config['explicit_split']: # when using fixed data split 

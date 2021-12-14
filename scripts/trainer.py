@@ -106,6 +106,15 @@ def train(model, optimizer, dataloader, config, scheduler=None):
             all_atoms += data.mask.sum() # with mask information
             all_loss += loss.item()*data.mask.sum()
         
+        elif config['dataset'] == 'pka/chembl':
+            if config['propertyLevel'] == 'atom': 
+                loss = get_loss_fn(config['loss'])(data.mol_y, y[0].view(-1)[data.mask>0])
+            elif config['propertyLevel'] == 'molecule':
+                loss = get_loss_fn(config['loss'])(data.mol_y, y[1])
+            else:
+                pass
+            all_loss += loss.item()*data.mask.sum()
+        
         else: 
             if config['propertyLevel'] == 'molecule': # for single task, like exp solvation, solubility, ect
                 assert config['taskType'] == 'single'
@@ -215,6 +224,14 @@ def test(model, dataloader, config):
                     error += get_metrics_fn(config['metrics'])(data.atom_y[data.mask>0], y[0].view(-1)[data.mask>0])*data.mask.sum().item()
                 total_N += data.mask.sum().item()
             
+            elif config['dataset'] == 'pka/chembl':
+                if config['propertyLevel'] == 'atom': 
+                    error += get_metrics_fn(config['metrics'])(data.mol_y, y[0].view(-1)[data.mask>0]) * data.num_graphs
+                elif config['propertyLevel'] == 'molecule':
+                    error += get_metrics_fn(config['metrics'])(data.mol_y, y[1]) * data.num_graphs
+                else:
+                    pass 
+
             else: 
                 if config['test_level'] == 'molecule':
                     if config['gnn_type'] == 'dmpnn':

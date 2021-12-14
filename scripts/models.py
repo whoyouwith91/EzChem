@@ -21,21 +21,21 @@ def get_model(config):
         return GNN_1(config)
     if name == '1-2-GNN':
         return GNN_1_2(config)
-    if name == '1-efgs-GNN':
-        return GNN_1_EFGS(config)
-    if name == '1-interaction-GNN':
-        if config['dataset'] in ['solWithWater', 'solWithWater_calc/ALL', 'logpWithWater', 'logpWithWater_calc/ALL']:
-            if config['interaction_simpler']:
-                return GNN_1_WithWater_simpler(config)
-            else:
-                return GNN_1_WithWater(config)
-    if name == '1-2-GNN_dropout':
-        return knn_dropout
-    if name == '1-2-GNN_swag':
-        return knn_swag
+    #if name == '1-efgs-GNN':
+    #    return GNN_1_EFGS(config)
+    #if name == '1-interaction-GNN':
+    #    if config['dataset'] in ['solWithWater', 'solWithWater_calc/ALL', 'logpWithWater', 'logpWithWater_calc/ALL']:
+    #        if config['interaction_simpler']:
+    #            return GNN_1_WithWater_simpler(config)
+    #        else:
+    #            return GNN_1_WithWater(config)
+    #if name == '1-2-GNN_dropout':
+    #    return knn_dropout
+    #if name == '1-2-GNN_swag':
+    #    return knn_swag
     if name == 'physnet':
         return PhysDimeNet(**config)
-    
+
 class GNN(torch.nn.Module):
     """
     Basic GNN unit modoule.
@@ -190,14 +190,11 @@ class GNN_1(torch.nn.Module):
         self.tsne = config['tsne']
         self.uncertainty = config['uncertainty']
         self.uncertaintyMode = config['uncertaintyMode']
-        self.weight_regularizer = config['weight_regularizer']
-        self.dropout_regularizer = config['dropout_regularizer']
         self.features = config['mol_features']
 
         self.gnn = GNN(config)
         self.outLayers = nn.ModuleList()
-        #if self.uncertainty:
-        #    self.uncertaintyLayers = nn.ModuleList()
+
         if self.graph_pooling not in ['edge', 'topk', 'sag']: # except for edge pooling, coded here
             self.pool = PoolingFN(config) # after node embedding updating and pooling 
 
@@ -212,17 +209,14 @@ class GNN_1(torch.nn.Module):
         elif self.graph_pooling == 'conv': # change readout layers input and output dimension
             embed_size = self.mult * self.emb_dim / 2  
         elif self.features:
-            if self.dataset == 'sol_calc/ALL': # 208 total mol descriptors # total is 200
-               embed_size = self.mult * self.emb_dim + 208
+            if self.graph_pooling not in ['atomic']:
+                embed_size = self.mult * self.emb_dim + 208
         else: # change readout layers input and output dimension
             embed_size = self.mult * self.emb_dim 
 
         for idx, (L_in, L_out) in enumerate(zip([embed_size] + self.fully_connected_layer_sizes, self.fully_connected_layer_sizes + [self.num_tasks])):
             if idx != len(self.fully_connected_layer_sizes):
                 fc = nn.Sequential(Linear(L_in, L_out), activation_func(config), nn.Dropout(config['drop_ratio']))
-                #L_in, L_out = self.outLayers[-1][0].out_features, int(self.outLayers[-1][0].out_features / 2)    
-                #if self.uncertainty: # for uncertainty 
-                #    self.uncertaintyLayers.append(NNDropout(weight_regularizer=self.weight_regularizer, dropout_regularizer=self.dropout_regularizer)) 
                 self.outLayers.append(fc)
             else:
                 if self.uncertainty:
@@ -287,11 +281,10 @@ class GNN_1(torch.nn.Module):
                 MolEmbed = self.pool(node_representation, batch)  # atomic read-out (-1, 1)
         if self.propertyLevel == 'atom':
             MolEmbed = node_representation #(-1, emb_dim)
-        #elif self.propertyLevel in ['atom', 'atomMol']:
-        #    MolEmbed = node_representation  # atomic read-out
+       
         if self.features: # concatenating molecular features
-            #print(data.features.shape, MolEmbed.shape)
-            MolEmbed = torch.cat((MolEmbed, data.features.view(MolEmbed.shape[0], -1)), -1)
+            if self.graph_pooling not in ['atomic']:
+                MolEmbed = torch.cat((MolEmbed, data.features.view(MolEmbed.shape[0], -1)), -1)
         if not self.training and not self.gradCam and self.tsne: # for TSNE analysis
             return node_representation, MolEmbed
 
@@ -301,11 +294,7 @@ class GNN_1(torch.nn.Module):
                 MolEmbed = layer(MolEmbed)
             if self.config['normalize']:
                 MolEmbed = self.scale[Z, :] * MolEmbed + self.shift[Z, :]
-                #print(MolEmbed.shape)
-                #print(self.scale[Z, :].shape)
-            #if self.dataset == 'solNMR' and self.propertyLevel == 'atomMol':
-            #    for layer in self.outLayers1:
-            #        node_representation = layer(node_representation)
+                
             if self.num_tasks > 1 and self.dataset not in ['bbbp']: # bbbp is different from mixing of atom-level and mol-level properties
                 if self.dataset in ['solNMR', 'solALogP', 'qm9/nmr/allAtoms']:
                     assert MolEmbed.size(-1) == self.num_tasks

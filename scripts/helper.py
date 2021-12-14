@@ -20,13 +20,13 @@ from kwargs import physnet_kwargs
 
 ################### Configuration setting names ############################
 data_config = ['dataset', 'model', 'style', 'data_path', 'EFGS', 'efgs_lenth', 'num_i_2', 'batch_size']
-model_config = ['dataset', 'model', 'gnn_type',  'batch_size', 'emb_dim', 'act_fn' , 'weights', 'num_atom_features', 'num_tasks', 'propertyLevel', \
-         'num_bond_features', 'pooling', 'NumParas', 'num_layer', 'JK', 'fully_connected_layer_sizes', 'aggregate', 'mol_features', 'tsne', \
-             'residual_connect', 'resLayer', 'interaction_simpler', 'weight_regularizer', 'dropout_regularizer', 'gradCam', 'uncertainty', \
+model_config = ['dataset', 'model', 'gnn_type',  'bn', 'batch_size', 'emb_dim', 'act_fn' , 'weights', 'num_atom_features', 'num_tasks', 'propertyLevel', \
+         'test_level', 'num_bond_features', 'pooling', 'NumParas', 'num_layer', 'JK', 'fully_connected_layer_sizes', 'aggregate', 'mol_features', 'tsne', \
+             'residual_connect', 'gradCam', 'uncertainty', \
                  'uncertaintyMode', 'drop_ratio', 'energy_shift_value', 'energy_scale_value', 'deg_value']
-train_config = ['running_path', 'seed', 'num_tasks', 'propertyLevel', 'test_level', 'optimizer', 'loss', 'metrics', 'lr', 'lr_style', \
+train_config = ['running_path', 'seed', 'optimizer', 'loss', 'metrics', 'lr', 'lr_style', \
          'epochs', 'early_stopping', 'train_type', 'taskType', 'train_size', 'val_size', 'test_size', 'sample', 'sample_size', 'data_seed', \
-         'preTrainedPath', 'uncertainty', 'uncertaintyMode', 'swag_start', 'action', 'mask', 'explicit_split', 'bn']
+         'preTrainedPath', 'uncertainty', 'uncertaintyMode', 'explicit_split', ]
 #VAE_opts = ['vocab_path', 'vocab_name', 'vocab_size', 'numEncoLayers', 'numDecoLayers', 'numEncoders', 'numDecoders', 'varDimen', 'anneal', 'kl_weight', 'anneal_method', 'anneal_epoch']
 ###############################################################################
 

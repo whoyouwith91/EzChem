@@ -28,19 +28,14 @@ def get_parser():
     parser.add_argument('--seed', type=int, default=0, help = "Seed for splitting dataset.")
     parser.add_argument('--num_workers', type=int, default = 8, help='number of workers for dataset loading')
     parser.add_argument('--model', type=str, default="1-GNN")
-    parser.add_argument('--ACSF', action='store_true')
-    parser.add_argument('--2D', action='store_true')
     parser.add_argument('--DMPNN', action='store_true')
     parser.add_argument('--mol_features', action='store_true')
     parser.add_argument('--residual_connect', action='store_true')
-    parser.add_argument('--interaction_simpler', action='store_true')
     parser.add_argument('--pooling', type=str, default='sum')
     parser.add_argument('--aggregate', type=str, default='add')
     parser.add_argument('--gnn_type', type=str, default="gin")
     parser.add_argument('--bn', action='store_true')
     parser.add_argument('--JK', type=str, default="last", help='how the node features are combined across layers. last, sum, max or concat')
-    parser.add_argument('--action', type=str) # physnet
-    parser.add_argument('--mask', action='store_true') # for nmr type; 
     parser.add_argument('--train_type', type=str, default='from_scratch', choices=['from_scratch', 'transfer', 'hpsearch', 'finetuning'])
     parser.add_argument('--preTrainedPath', type=str)
     parser.add_argument('--propertyLevel', type=str, default='molecule')
@@ -52,15 +47,12 @@ def get_parser():
     parser.add_argument('--normalize', action='store_true')
     parser.add_argument('--act_fn', type=str, default='relu')
     parser.add_argument('--optimizer',  type=str, choices=['adam', 'sgd', 'swa', 'EMA', 'adamW', 'SWA'])
-    parser.add_argument('--style', type=str, default='base')  # if running CV
+    parser.add_argument('--style', type=str)  # 2D or 3D
     parser.add_argument('--early_stopping', action='store_true')
     parser.add_argument('--experiment', type=str)  # when doing experimenting, name it. 
     parser.add_argument('--gradCam', action='store_true')
     parser.add_argument('--tsne', action='store_true')
     parser.add_argument('--uncertainty',  action='store_true')
     parser.add_argument('--uncertaintyMode',  type=str)
-    parser.add_argument('--weight_regularizer', type=float, default=1e-6)
-    parser.add_argument('--dropout_regularizer', type=float, default=1e-5)
-    parser.add_argument('--swag_start', type=int)
     
     return parser.parse_args()

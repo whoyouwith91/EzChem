@@ -34,7 +34,7 @@ def main():
     this_dic['train_size'], this_dic['val_size'] = int(dataSizes[args.dataset]['train_size']), int(dataSizes[args.dataset]['val_size'])
 
     # ------------------------------------load processed data-----------------------------------------------------------------------------
-    this_dic['data_path'] = os.path.join(args.allDataPath, args.dataset, 'graphs', args.style, args.model)
+    this_dic['data_path'] = os.path.join(args.allDataPath, args.dataset, 'graphs', args.model, args.style)
     loader = get_data_loader(this_dic)
     train_loader, val_loader, test_loader, num_atom_features, num_bond_features, _ = loader.train_loader, loader.val_loader, loader.test_loader, loader.num_features, loader.num_bond_features, loader.num_i_2
     this_dic['num_atom_features'], this_dic['num_bond_features'] = int(num_atom_features), num_bond_features
@@ -104,7 +104,7 @@ def main():
         else:lr = scheduler.optimizer.param_groups[0]['lr'] # decaying on val error
 
         loss = train_model(this_dic)(model_, optimizer, train_loader, this_dic, scheduler=scheduler) # training loss
-        time_toc = time.time() # ending time 
+        
 
         # testing parts
         if this_dic['dataset'] in large_datasets: # see helper about large datasets
@@ -121,6 +121,7 @@ def main():
         if this_dic['scheduler'] == 'decay':
             scheduler.step(val_error)
 
+        time_toc = time.time() # ending time 
         # write out models and results
         if not this_dic['uncertainty']:
             #assert torch.is_tensor(train_error)
