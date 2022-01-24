@@ -199,7 +199,7 @@ class GNN_1(torch.nn.Module):
             self.pool = PoolingFN(config) # after node embedding updating and pooling 
 
         #For graph-level property predictions
-        if self.graph_pooling[:-1][0] == "set2set": # set2set will double dimension
+        if self.graph_pooling == "set2set": # set2set will double dimension
             self.mult = 2
         else:
             self.mult = 1
@@ -255,7 +255,7 @@ class GNN_1(torch.nn.Module):
         if self.config['normalize']:
             Z = data.Z
             if self.gnn_type == 'dmpnn':
-               Z = torch.cat((torch.zeros(1).int(), data.Z))
+               Z = torch.cat((torch.zeros(1).int().cuda(), data.Z))
         if self.graph_pooling == 'edge':
             node_representation, final_batch = self.gnn(x, edge_index, edge_attr, batch) # node updating
         elif self.gnn_type == 'dmpnn':
@@ -327,7 +327,7 @@ class GNN_1(torch.nn.Module):
             elif self.propertyLevel == 'molecule' and self.graph_pooling == 'atomic':
                 if self.gnn_type == 'dmpnn':
                     return MolEmbed.view(-1), self.pool(MolEmbed, a_scope).view(-1)
-                else:
+                else: # pnaconv, ginconv
                     return MolEmbed.view(-1), global_add_pool(MolEmbed, batch).view(-1)
             
             elif self.dataset in ['bbbp']: # classifications 

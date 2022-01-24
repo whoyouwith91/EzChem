@@ -26,13 +26,7 @@ def main():
     results = createResultsFile(this_dic) # create pretty table
 
     # define task type: multi or single, see helper
-    this_dic = getTaskType(this_dic) 
-
-    # load data size info for train/validation/test because we save all of them in one single file. 
-    with open('/scratch/dz1061/gcn/chemGraph/configs/splitsize.json', 'r') as f:
-        dataSizes = json.load(f)
-    this_dic['train_size'], this_dic['val_size'] = int(dataSizes[args.dataset]['train_size']), int(dataSizes[args.dataset]['val_size'])
-
+    this_dic = getTaskType(this_dic)
     # ------------------------------------load processed data-----------------------------------------------------------------------------
     this_dic['data_path'] = os.path.join(args.allDataPath, args.dataset, 'graphs', args.model, args.style)
     loader = get_data_loader(this_dic)
@@ -54,16 +48,18 @@ def main():
 
     model = get_model(this_dic)
     # model weights initializations
-    if this_dic['train_type'] == 'from_scratch' and this_dic['model'] not in ['physnet']: 
+    if this_dic['model'] not in ['physnet']: 
+    #if this_dic['train_type'] == 'from_scratch' and this_dic['model'] not in ['physnet']: 
         model = init_weights(model, this_dic)
     
     if this_dic['train_type'] in ['finetuning', 'transfer']:
         if args.normalize:
-            state_dict = torch.load(os.path.join(args.preTrainedPath, 'best_model', 'model_best.pt'))
-            state_dict.update({key:value for key,value in model.state_dict().items() if key in ['scale', 'shift']}) # scale and shift from new train loader
+            state_dict = torch.load(os.path.join(args.preTrainedPath, 'best_model', 'model_best.pt'), map_location=torch.device('cpu'))
+            #state_dict.update({key:value for key,value in model.state_dict().items() if key in ['scale', 'shift']}) # scale and shift from new train loader
             #model.load_state_dict(state_dict) 
             own_state = model.state_dict()
             for name, param in state_dict.items():
+                #if name.startswith('gnn'):
                 own_state[name].copy_(param)
         else:
             model.from_pretrained(os.path.join(args.preTrainedPath, 'best_model', 'model_best.pt')) # load weights for encoders 
@@ -97,15 +93,7 @@ def main():
     scheduler = build_lr_scheduler(optimizer, this_dic)
     
     best_val_error = float("inf")
-    for epoch in range(1, this_dic['epochs']+1):
-        time_tic = time.time() # ending time 
-        if this_dic['scheduler'] == 'const': lr = args.lr
-        elif this_dic['scheduler'] in ['NoamLR', 'step']: lr = scheduler.get_lr()[0]
-        else:lr = scheduler.optimizer.param_groups[0]['lr'] # decaying on val error
-
-        loss = train_model(this_dic)(model_, optimizer, train_loader, this_dic, scheduler=scheduler) # training loss
-        
-
+    for epoch in range(this_dic['epochs']+1):
         # testing parts
         if this_dic['dataset'] in large_datasets: # see helper about large datasets
             train_error = loss # coz train set is too large to be tested every epoch
@@ -118,15 +106,29 @@ def main():
         else:
             val_error = test_model(this_dic)(model_, val_loader, this_dic) # test on entire dataset
             test_error = test_model(this_dic)(model_, test_loader, this_dic) # test on entire dataset
+
+        # model saving
+        if args.optimizer == 'EMA': # physnet
+                best_val_error = saveModel(this_dic, epoch, shadow_model, best_val_error, val_error)
+        else:
+            if this_dic['loss'] in ['class']:
+                val_error = 0 - val_error
+            best_val_error = saveModel(this_dic, epoch, model_, best_val_error, val_error) # save model if validation error hits new lower 
+
+        # training parts
+        time_tic = time.time() # ending time 
+        if this_dic['scheduler'] == 'const': lr = args.lr
+        elif this_dic['scheduler'] in ['NoamLR', 'step']: lr = scheduler.get_lr()[0]
+        else:lr = scheduler.optimizer.param_groups[0]['lr'] # decaying on val error
+
+        loss = train_model(this_dic)(model_, optimizer, train_loader, this_dic, scheduler=scheduler) # training loss
+        time_toc = time.time() # ending time 
+        
         if this_dic['scheduler'] == 'decay':
             scheduler.step(val_error)
-
-        time_toc = time.time() # ending time 
+        
         # write out models and results
         if not this_dic['uncertainty']:
-            #assert torch.is_tensor(train_error)
-            #assert torch.is_tensor(val_error)
-            #assert torch.is_tensor(test_error)
             if this_dic['dataset'] == 'solEFGs' and this_dic['propertyLevel'] == 'atom':
                 contents = [epoch, round(time_toc-time_tic, 2), round(lr,7), round(train_error[0],3), round(train_error[1],3),  \
                 round(val_error,3), round(test_error,3), round(param_norm(model_),2), round(grad_norm(model_),2)]
@@ -135,12 +137,7 @@ def main():
                 round(val_error,6), round(test_error,6), round(param_norm(model_),2), round(grad_norm(model_),2)]
             results.add_row(contents) # updating pretty table 
             saveToResultsFile(results, this_dic, name='data.txt') # save instant data to directory
-            if args.optimizer == 'EMA': # physnet
-                best_val_error = saveModel(this_dic, epoch, shadow_model, best_val_error, val_error)
-            else:
-                if this_dic['loss'] in ['class']:
-                    val_error = 0 - val_error
-                best_val_error = saveModel(this_dic, epoch, model_, best_val_error, val_error) # save model if validation error hits new lower 
+            
         else: 
             contents = [epoch, round(time_toc-time_tic, 2), round(lr,7), round(train_error,6),  \
                 round(val_error,6), round(test_error,6), round(param_norm(model_),2), round(grad_norm(model_),2)]

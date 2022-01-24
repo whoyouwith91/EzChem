@@ -5,19 +5,10 @@ from utils_functions import collate_fn # sPhysnet
 import torch
 import random
 
-
-class get_split_data():
-   def __init__(self, config):
-      super(get_split_data)
-        
-      self.train = pd.read_csv(os.path.join(config['dataPath'], config['dataset'], 'train.csv'), names=['SMILES', 'target'])
-      self.valid = pd.read_csv(os.path.join(config['dataPath'], config['dataset'], 'train.csv'), names=['SMILES', 'target'])
-      self.test = pd.read_csv(os.path.join(config['dataPath'], config['dataset'], 'train.csv'), names=['SMILES', 'target'])
         
 class get_data_loader():
    def __init__(self, config):
       self.config = config
-      self.name = config['dataset']
       self.model = config['model']
       if config['explicit_split']:
          if config['dataset'] in ['qm9/u0']:
@@ -35,32 +26,8 @@ class get_data_loader():
          self.train_size, self.val_size = config['train_size'], config['val_size']
          if config['sample']:
             self.data_seed = config['data_seed']
-            self.sample_size = config['sample_size']
-
-      if self.name == None:
-         raise ValueError('Please specify one dataset you want to work on!')
       self.train_loader, self.val_loader, self.test_loader, self.num_features, self.num_bond_features, self.num_i_2 = self.graph_loader()
       
-      if self.model in ['VAE', 'TransformerUnsuper']:
-         self.tokenizer = MolTokenizer(vocab_file=os.path.join(self.config['vocab_path'], self.config['vocab_name']))
-    
-         pad_idx = self.tokenizer.pad_token_id
-         unk_idx = self.tokenizer.unk_token_id
-         eos_idx = self.tokenizer.eos_token_id
-         init_idx = self.tokenizer.bos_token_id   
-           
-         self.vocab_size = self.tokenizer.vocab_size
-         TEXT = torchtext.data.Field(use_vocab=False, \
-                                    tokenize=self.tokenizer.encode, \
-                                    pad_token=pad_idx, \
-                                    unk_token=unk_idx, \
-                                    eos_token=eos_idx, \
-                                    init_token=init_idx, \
-                                    batch_first=True)
-         IDS = torchtext.data.Field(use_vocab=False, dtype=torch.long, sequential=False)
-         self.fields = [("id", IDS), ("SRC", TEXT), ("TRG", TEXT)]
-
-         self.train_loader, self.val_loader, self.test_loader = self.vaeLoader()
     
    def graph_loader(self):
 
@@ -106,17 +73,9 @@ class get_data_loader():
             dataset = physnet(root=self.config['data_path'], pre_transform=my_pre_transform)
          #dataset = DummyIMDataset(root=self.config['data_path'], dataset_name='processed.pt')
          num_i_2 = None
+      
       else: # 1-GNN
-         if self.config['dataset'] in ['solNMR', 'solALogP', 'sol_calc/ALL/smaller', 'sol_calc/ALL/smaller/3cutoff', \
-                                    'sol_calc/ALL/smaller/4cutoff', 'sol_calc/ALL/smaller/5cutoff', \
-                                    'sol_calc/ALL/smaller/6cutoff', 'sol_calc/ALL/smaller/7cutoff', \
-                                    'sol_calc/ALL/smaller/8cutoff', 'sol_calc/ALL/smaller/9cutoff', \
-                                    'sol_calc/ALL/smaller_18W', 'sol_calc/ALL/smaller_28W', \
-                                    'sol_calc/ALL/smaller_38W', 'sol_calc/ALL/smaller_48W', \
-                                    'sol_calc/ALL/smaller_58W', 'sol_calc/ALL/smaller/noHs', \
-                                    'sol_calc/ALL/smaller_58W/6cutoff', 'sol_calc/ALL/smaller_48W/6cutoff', \
-                                    'sol_calc/ALL/smaller_38W/6cutoff', 'sol_calc/ALL/smaller_28W/6cutoff', \
-                                    'sol_calc/ALL/smaller_18W/6cutoff']:
+         if self.config['dataset'] in ['solNMR', 'solALogP', 'sol_calc/smaller']:
             if self.config['propertyLevel'] == 'multiMol': # for multiple mol properties
                dataset = knnGraph_multi(root=self.config['data_path'])
             if self.config['propertyLevel'] == 'molecule': # naive, only with solvation property
@@ -172,19 +131,28 @@ class get_data_loader():
          val_dataset = dataset[self.valid_index]
          train_dataset = dataset[self.train_index]
 
-      else:
+      if self.config['sample']:
+         random.seed(self.data_seed)
+         if self.config['fix_test']: # fixed test and do CV 
+            rest_dataset = dataset[:my_split_ratio[0]+my_split_ratio[1]]
+            train_dataset = rest_dataset.index_select(random.sample(range(my_split_ratio[0]+my_split_ratio[1]), my_split_ratio[0]))
+            val_dataset = rest_dataset[list(set(rest_dataset.indices()) - set(train_dataset.indices()))]
+            test_dataset = dataset[my_split_ratio[0]+my_split_ratio[1]:]
+         elif self.config['vary_train_only']: # varying train size and fixed val/test set
+            dataset_ = dataset[:my_split_ratio[0]]
+            train_dataset = dataset_.index_select(random.sample(range(my_split_ratio[0]), self.config['sample_size']))
+            val_dataset = dataset[my_split_ratio[0]:my_split_ratio[0]+my_split_ratio[1]]
+            test_dataset = dataset[my_split_ratio[0]+my_split_ratio[1]:]
+         else: # random split for train/valid/test
+            rest_dataset = dataset.index_select(random.sample(range(len(dataset)), my_split_ratio[0]+my_split_ratio[1]))
+            test_dataset = dataset[list(set(dataset.indices()) - set(rest_dataset.indices()))]
+            train_dataset = rest_dataset[:my_split_ratio[0]]
+            val_dataset = rest_dataset[my_split_ratio[0]:mysplit_ratio[0]+my_split_ratio[1]]
+      
+      else: # not sampling
          test_dataset = dataset[my_split_ratio[0]+my_split_ratio[1]:]
          rest_dataset = dataset[:my_split_ratio[0]+my_split_ratio[1]]
          train_dataset, val_dataset = rest_dataset[:my_split_ratio[0]], rest_dataset[my_split_ratio[0]:]
-
-      if self.config['sample']:
-         random.seed(self.data_seed)
-         if 'freesol/plus' in self.config['dataset']:
-            sample_dataset = train_dataset[502:].index_select(random.sample(range(475), self.sample_size))
-            train_dataset = train_dataset[:502] + sample_dataset
-         else:
-            train_dataset = rest_dataset.index_select(random.sample(range(my_split_ratio[0]+my_split_ratio[1]), my_split_ratio[0]))
-            val_dataset = rest_dataset[list(set(rest_dataset.indices()) - set(train_dataset.indices()))]
 
       if self.config['model'] in ['physnet']:
          if self.config['explicit_split']: # when using fixed data split 
@@ -207,26 +175,6 @@ class get_data_loader():
       
       return train_loader, val_loader, test_loader, num_features, num_bond_features, num_i_2
 
-   def vaeLoader(self):
-      train_data, valid_data, test_data = data.TabularDataset.splits(
-                path=self.config['data_path'],
-                train='train.csv',
-                validation='valid.csv',
-                test='test.csv',
-                format="csv",
-                fields=self.fields,)
 
-      train_iterator, valid_iterator, test_iterator = data.BucketIterator.splits(
-                (train_data, valid_data, test_data),
-                batch_size=self.config['batch_size'],
-                shuffle=True,
-                sort=False,
-                device=self.config['device'])
-        
-      return train_iterator, valid_iterator, test_iterator
-
-   def descriptorLoader(self):
-      #TODO
-      pass
 
 

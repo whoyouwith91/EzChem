@@ -19,22 +19,19 @@ from typing import List, Union
 from kwargs import physnet_kwargs
 
 ################### Configuration setting names ############################
-data_config = ['dataset', 'model', 'style', 'data_path', 'EFGS', 'efgs_lenth', 'num_i_2', 'batch_size']
+data_config = ['dataset', 'model', 'style', 'data_path', 'EFGS', 'efgs_lenth', 'num_i_2']
 model_config = ['dataset', 'model', 'gnn_type',  'bn', 'batch_size', 'emb_dim', 'act_fn' , 'weights', 'num_atom_features', 'num_tasks', 'propertyLevel', \
          'test_level', 'num_bond_features', 'pooling', 'NumParas', 'num_layer', 'JK', 'fully_connected_layer_sizes', 'aggregate', 'mol_features', 'tsne', \
              'residual_connect', 'gradCam', 'uncertainty', \
-                 'uncertaintyMode', 'drop_ratio', 'energy_shift_value', 'energy_scale_value', 'deg_value']
+                 'uncertaintyMode', 'drop_ratio', 'energy_shift_value', 'energy_scale_value', 'deg_value', 'normalize']
 train_config = ['running_path', 'seed', 'optimizer', 'loss', 'metrics', 'lr', 'lr_style', \
-         'epochs', 'early_stopping', 'train_type', 'taskType', 'train_size', 'val_size', 'test_size', 'sample', 'sample_size', 'data_seed', \
-         'preTrainedPath', 'uncertainty', 'uncertaintyMode', 'explicit_split', ]
+         'epochs', 'early_stopping', 'train_type', 'taskType', 'train_size', 'val_size', 'test_size', 'sample', 'data_seed', \
+         'preTrainedPath', 'uncertainty', 'uncertaintyMode', 'explicit_split', 'fix_test', 'vary_train_only', 'sample_size']
 #VAE_opts = ['vocab_path', 'vocab_name', 'vocab_size', 'numEncoLayers', 'numDecoLayers', 'numEncoders', 'numDecoders', 'varDimen', 'anneal', 'kl_weight', 'anneal_method', 'anneal_epoch']
 ###############################################################################
 
 ####
-large_datasets = ['mp', 'mp_drugs', 'xlogp3', 'calcLogP/ALL', 'sol_calc/ALL/smaller_18W', \
-             'sol_calc/ALL/smaller_28W', 'sol_calc/ALL/smaller_38W', 'sol_calc/ALL/smaller_48W', 'sol_calc/ALL/smaller_58W', \
-             'sol_calc/ALL/smaller_18W/6cutoff', 'sol_calc/ALL/smaller_28W/6cutoff', 'sol_calc/ALL/smaller_38W/6cutoff', \
-             'sol_calc/ALL/smaller_48W/6cutoff', 'sol_calc/ALL/smaller_58W/6cutoff', \
+large_datasets = ['mp', 'mp_drugs', 'xlogp3', 'calcLogP/ALL', 'sol_calc/smaller', \
              'solOct_calc/ALL', 'solWithWater_calc/ALL', 'solOctWithWater_calc/ALL', 'calcLogPWithWater/ALL', \
                  'qm9/nmr/carbon', 'qm9/nmr/hydrogen', 'qm9/nmr/allAtoms', 'calcSolLogP/ALL', 'nmr/carbon', 'nmr/hydrogen', \
                  'solEFGs', 'frag14/nmr/carbon', 'frag14/nmr/hydrogen']
@@ -323,7 +320,7 @@ def loadConfig(path, name='config.json'):
         config = json.load(f)
     return config
 
-def saveModel(config, epoch, model, bestValError, valError, swag_model=None):
+def saveModel(config, epoch, model, bestValError, valError):
     if config['early_stopping']:
         if bestValError > np.sum(valError):
             patience = 0
@@ -341,8 +338,7 @@ def saveModel(config, epoch, model, bestValError, valError, swag_model=None):
             bestValError = np.sum(valError)
             #logging.info('Saving models...')
             torch.save(model.state_dict(), os.path.join(config['running_path'], 'best_model', 'model_best.pt'))
-            if config['model'].endswith('swag'):
-                torch.save(swag_model.state_dict(), os.path.join(config['running_path'], 'best_model', 'swag_model_'+str(epoch)+'.pt'))
+            
     return bestValError
 
 class objectview(object):

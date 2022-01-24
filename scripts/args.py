@@ -21,12 +21,16 @@ def get_parser():
     parser.add_argument('--fully_connected_layer_sizes', type=int, nargs='+') # number of readout layers
     parser.add_argument('--dataset', type=str, default = 'zinc_standard_agent', help='root directory of dataset for pretraining')
     parser.add_argument('--explicit_split', action='store_true') # TODO
+    parser.add_argument('--train_size', type=int)
+    parser.add_argument('--val_size', type=int)
+    parser.add_argument('--test_size', type=int)
     parser.add_argument('--sample', action='store_true') # 
+    parser.add_argument('--fix_test', action='store_true') # whether fix test set doing CV
+    parser.add_argument('--vary_train_only', action='store_true') 
+    parser.add_argument('--sample_size', type=int, default=0)
     parser.add_argument('--data_seed', type=int, default=0)
-    parser.add_argument('--sample_size', type=int, default=100) # 
     parser.add_argument('--drop_ratio', type=float, default=0.0) 
     parser.add_argument('--seed', type=int, default=0, help = "Seed for splitting dataset.")
-    parser.add_argument('--num_workers', type=int, default = 8, help='number of workers for dataset loading')
     parser.add_argument('--model', type=str, default="1-GNN")
     parser.add_argument('--DMPNN', action='store_true')
     parser.add_argument('--mol_features', action='store_true')
@@ -44,7 +48,7 @@ def get_parser():
     parser.add_argument('--metrics', type=str, choices=['l1', 'l2', 'class'])
     parser.add_argument('--weights', type=str, choices=['he_norm', 'xavier_norm', 'he_uni', 'xavier_uni'], default='he_uni')
     parser.add_argument('--clip', action='store_true') # clip weights or not
-    parser.add_argument('--normalize', action='store_true')
+    parser.add_argument('--normalize', action='store_true') # only for atomic property related
     parser.add_argument('--act_fn', type=str, default='relu')
     parser.add_argument('--optimizer',  type=str, choices=['adam', 'sgd', 'swa', 'EMA', 'adamW', 'SWA'])
     parser.add_argument('--style', type=str)  # 2D or 3D

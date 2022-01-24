@@ -33,14 +33,7 @@ def train(model, optimizer, dataloader, config, scheduler=None):
         optimizer.zero_grad()
         y = model(data) # y contains different outputs depending on the # of tasks
         
-        if config['dataset'] in ['solNMR', 'solALogP', 'qm9/nmr/allAtoms', 'sol_calc/ALL/smaller', 'sol_calc/ALL/smaller_18W', \
-                                    'sol_calc/ALL/smaller_28W', 'sol_calc/ALL/smaller_38W', 'sol_calc/ALL/smaller_48W', \
-                                    'sol_calc/ALL/smaller_58W', 'logp_calc/ALL/smaller_58W', 'logp_calc/ALL/smaller', \
-                                    'sol_calc/ALL/smaller/3cutoff', 'sol_calc/ALL/smaller/4cutoff', 'sol_calc/ALL/smaller/5cutoff', \
-                                    'sol_calc/ALL/smaller/6cutoff', 'sol_calc/ALL/smaller/7cutoff', 'sol_calc/ALL/smaller/8cutoff', \
-                                    'sol_calc/ALL/smaller/9cutoff', 'sol_calc/ALL/smaller/noHs', 'sol_calc/ALL/smaller_58W/6cutoff', \
-                                    'sol_calc/ALL/smaller_48W/6cutoff', 'sol_calc/ALL/smaller_38W/6cutoff', 'sol_calc/ALL/smaller_28W/6cutoff', \
-                                    'sol_calc/ALL/smaller_18W/6cutoff']:
+        if config['dataset'] in ['solNMR', 'solALogP', 'qm9/nmr/allAtoms', 'sol_calc/smaller']:
             if config['propertyLevel'] == 'molecule': # single task on regression
                 assert config['taskType'] == 'single'
                 loss = get_loss_fn(config['loss'])(y[1], data.mol_sol_wat)
@@ -155,7 +148,7 @@ def train(model, optimizer, dataloader, config, scheduler=None):
             return all_loss.item() / len(dataloader.dataset) * 23 # ev --> kcal/mol
         else:
             assert config['test_level'] == 'molecule'
-            return all_loss.item() / len(dataloader.dataset) 
+            return all_loss / len(dataloader.dataset) 
     
     if config['propertyLevel'] in ['atomMol', 'multiMol', 'atomMultiMol']: # mixed tasks of single/multi
         return loss.item()
@@ -175,23 +168,16 @@ def test(model, dataloader, config):
             data = data.to(config['device'])
             y = model(data)
 
-            if config['dataset'] in ['solNMR', 'solALogP', 'qm9/nmr/allAtoms', 'sol_calc/ALL/smaller', 'sol_calc/ALL/smaller_18W', \
-                                    'sol_calc/ALL/smaller_28W', 'sol_calc/ALL/smaller_38W', 'sol_calc/ALL/smaller_48W', \
-                                    'sol_calc/ALL/smaller_58W', 'logp_calc/ALL/smaller_58W', 'logp_calc/ALL/smaller', \
-                                    'sol_calc/ALL/smaller/3cutoff', 'sol_calc/ALL/smaller/4cutoff', 'sol_calc/ALL/smaller/5cutoff', \
-                                    'sol_calc/ALL/smaller/6cutoff', 'sol_calc/ALL/smaller/7cutoff', 'sol_calc/ALL/smaller/8cutoff', \
-                                    'sol_calc/ALL/smaller/9cutoff', 'sol_calc/ALL/smaller/noHs', 'sol_calc/ALL/smaller_58W/6cutoff', \
-                                    'sol_calc/ALL/smaller_48W/6cutoff', 'sol_calc/ALL/smaller_38W/6cutoff', 'sol_calc/ALL/smaller_28W/6cutoff', \
-                                    'sol_calc/ALL/smaller_18W/6cutoff']:
+            if config['dataset'] in ['solNMR', 'solALogP', 'qm9/nmr/allAtoms', 'sol_calc/smaller']:
                 if config['test_level'] == 'molecule': # the metrics on single task, currently on solvation energy only
                     if config['propertyLevel'] == 'multiMol':
                         pred = y[3]
                     elif config['propertyLevel'] in ['molecule', 'atomMol']:
                         pred = y[1]
                     if config['gnn_type'] == 'dmpnn':
-                        error += get_metrics_fn(config['metrics'])(pred, data.mol_sol_wat) * config['batch_size']
+                        error += get_metrics_fn(config['metrics'])(pred, data.mol_y) * config['batch_size']
                     else:
-                        error += get_metrics_fn(config['metrics'])(pred, data.mol_sol_wat) * data.num_graphs
+                        error += get_metrics_fn(config['metrics'])(pred, data.mol_y) * data.num_graphs
                 elif config['test_level'] == 'atom': #
                     total_N += data.N.sum().item()
                     error += get_metrics_fn(config['metrics'])(y[0], data.atom_y)*data.N.sum().item()
@@ -416,7 +402,7 @@ def train_physnet(model, optimizer, dataloader, config, scheduler=None):
             all_atoms += data.mask.sum() # with mask information
             all_loss += loss.item()*data.mask.sum()
         
-        elif config['dataset'] in ['sol_calc/ALL', 'sol_calc/ALL/COMPLETE', 'sol_calc/ALL/smaller', 'deepchem/freesol', 'deepchem/delaney', 'deepchem/logp', 'mp/bradley', 'pka/dataWarrior/acidic', 'pka/dataWarrior/basic']:
+        elif config['dataset'] in ['sol_calc/ALL', 'sol_calc/ALL/COMPLETE', 'sol_calc/smaller', 'deepchem/freesol', 'deepchem/delaney', 'deepchem/logp', 'mp/bradley', 'pka/dataWarrior/acidic', 'pka/dataWarrior/basic']:
             loss = get_loss_fn(config['loss'])(data.mol_sol_wat, y0['mol_prop'].view(-1)) # data.mol_sol_wat is not only for water solvation energy. TODO
             all_loss += loss.item()*data.mol_sol_wat.size()[0]
         
@@ -448,7 +434,7 @@ def train_physnet(model, optimizer, dataloader, config, scheduler=None):
         if config['scheduler'] in ['NoamLR', 'step']:
             scheduler.step()
     
-    if config['dataset'] in ['sol_calc/ALL', 'sol_calc/ALL/COMPLETE', 'qm9/u0', 'sol_calc/ALL/smaller', 'deepchem/freesol', 'deepchem/delaney', 'deepchem/logp', 'mp/bradley', 'pka/dataWarrior/acidic', 'pka/dataWarrior/basic']: 
+    if config['dataset'] in ['sol_calc/ALL', 'sol_calc/ALL/COMPLETE', 'qm9/u0', 'sol_calc/smaller', 'deepchem/freesol', 'deepchem/delaney', 'deepchem/logp', 'mp/bradley', 'pka/dataWarrior/acidic', 'pka/dataWarrior/basic']: 
         return np.sqrt((all_loss / len(dataloader.dataset)))
     elif config['dataset'] in ['solNMR']:
         if config['propertyLevel'] == 'molecule':
@@ -474,7 +460,7 @@ def test_physnet(model, dataloader, config):
                 error += get_metrics_fn(config['metrics'])(model(data)['atom_prop'].view(-1)[data.mask>0], data.y[data.mask>0])*data.mask.sum().item()
                 total_N += data.mask.sum().item()
 
-            elif config['dataset'] in ['sol_calc/ALL', 'sol_calc/ALL/COMPLETE', 'sol_calc/ALL/smaller', 'deepchem/freesol', 'deepchem/delaney', 'deepchem/logp', 'mp/bradley', 'pka/dataWarrior/acidic', 'pka/dataWarrior/basic']:
+            elif config['dataset'] in ['sol_calc/ALL', 'sol_calc/ALL/COMPLETE', 'sol_calc/smaller', 'deepchem/freesol', 'deepchem/delaney', 'deepchem/logp', 'mp/bradley', 'pka/dataWarrior/acidic', 'pka/dataWarrior/basic']:
                 error += get_metrics_fn(config['metrics'])(model(data)['mol_prop'].view(-1), data.mol_sol_wat)*data.mol_sol_wat.size()[0]
             
             elif config['dataset'] in ['solNMR']:
@@ -495,7 +481,7 @@ def test_physnet(model, dataloader, config):
                 total_N += data.N.sum().item()
                 error += get_metrics_fn(config['metrics'])(model(data)['atom_prop'].view(-1), data.y)*data.N.sum().item()
         
-        if config['dataset'] in ['sol_calc/ALL', 'sol_calc/ALL/COMPLETE', 'qm9/u0', 'sol_calc/ALL/smaller', 'deepchem/freesol', 'deepchem/delaney', 'deepchem/logp', 'mp/bradley', 'pka/dataWarrior/acidic', 'pka/dataWarrior/basic']:
+        if config['dataset'] in ['sol_calc/ALL', 'sol_calc/ALL/COMPLETE', 'qm9/u0', 'sol_calc/smaller', 'deepchem/freesol', 'deepchem/delaney', 'deepchem/logp', 'mp/bradley', 'pka/dataWarrior/acidic', 'pka/dataWarrior/basic']:
             return error.item() / len(dataloader.dataset) # MAE
         elif config['dataset'] in ['solNMR']:
             if config['test_level'] == 'molecule':

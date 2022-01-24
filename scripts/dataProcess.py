@@ -787,7 +787,7 @@ class knnGraph_dmpnn(InMemoryDataset):
                 x=d['x'],
                 edge_index=d['edge_index'],
                 edge_attr=d['edge_attr'],
-                mol_sol_wat=d['mol_sol_wat'],
+                mol_y=d['mol_y'],
                 N=d['N'],
                 Z=d['Z'],
                 a2b=d['a2b'],
@@ -1122,9 +1122,9 @@ def collate_dmpnn(data_list):
     * :code:`a2a`: (Optional): A mapping from an atom index to neighboring atom indices.
     """
     #keys = ['N', 'Z', 'mol_y']
-    keys = ['N', 'Z', 'mol_sol_wat']
-    atom_fdim = 50
-    bond_fdim = 50+7
+    keys = ['N', 'Z', 'mol_y']
+    atom_fdim = data_list[0]['x'].shape[1]
+    bond_fdim = atom_fdim+7
     batch = Batch()
     #batch.batch = []
     
@@ -1148,7 +1148,7 @@ def collate_dmpnn(data_list):
         
         batch['N'].append(mol_graph.N)
         batch['Z'].append(mol_graph.Z)
-        batch['mol_sol_wat'].append(mol_graph.mol_sol_wat)
+        batch['mol_y'].append(mol_graph.mol_y)
         #batch['mol_y'].append(mol_graph.mol_y)
         
         #batch.batch.append(torch.full((mol_graph.N.long().item(), ), i, dtype=torch.long))
