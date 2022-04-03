@@ -12,7 +12,7 @@ from prettytable import PrettyTable
 import pandas as pd
 import numpy as np
 from torch.optim.lr_scheduler import _LRScheduler
-from torchcontrib.optim import SWA
+#from torchcontrib.optim import SWA
 import sklearn.metrics as metrics
 
 from typing import List, Union
@@ -31,7 +31,7 @@ train_config = ['running_path', 'seed', 'optimizer', 'loss', 'metrics', 'lr', 'l
 ###############################################################################
 
 ####
-large_datasets = ['mp', 'mp_drugs', 'xlogp3', 'calcLogP/ALL', 'sol_calc/smaller', \
+large_datasets = ['mp', 'mp_drugs', 'xlogp3', 'calcLogP/ALL', 'sol_calc/smaller', 'sol_calc/all', \
              'solOct_calc/ALL', 'solWithWater_calc/ALL', 'solOctWithWater_calc/ALL', 'calcLogPWithWater/ALL', \
                  'qm9/nmr/carbon', 'qm9/nmr/hydrogen', 'qm9/nmr/allAtoms', 'calcSolLogP/ALL', 'nmr/carbon', 'nmr/hydrogen', \
                  'solEFGs', 'frag14/nmr/carbon', 'frag14/nmr/hydrogen']
@@ -41,7 +41,7 @@ def getTaskType(config):
     if config['dataset'] == 'calcSolLogP/ALL':
        config['taskType'] = 'multi'
        config['num_tasks'] = 3
-    elif config['dataset'] in ['solNMR', 'solALogP', 'qm9/nmr/allAtoms']:
+    elif config['dataset'] in ['solNMR', 'solALogP', 'qm9/nmr/allAtoms', 'sol_calc/smaller', 'sol_calc/all']:
         if config['propertyLevel'] == 'atomMol':
             config['num_tasks'] = 2
             config['taskType'] = 'multi'  
@@ -300,7 +300,7 @@ def saveToResultsFile(table, this_dic, name='data.txt'):
         with open(os.path.join(this_dic['running_path'], 'data.txt'), 'a') as f1:
             f1.write(str(contents[1]) + '\t' + str(round(contents[2]-contents[3], 2)) + '\t' + str(round(contents[4], 7)) + '\t' + str(round(contents[5], 7)) + '\t' + str(round(contents[6], 7)) + '\t' +  str(round(contents[7], 7)) + '\t' +  str(round(contents[8], 7)) + '\t' +  str(round(contents[9], 7)) + '\t' + str(contents[10]) + '\t' + str(contents[11]) + '\n')     
 
-    if this_dic['model'] in ['1-GNN', '1-2-GNN', '1-efgs-GNN', '1-2-efgs-GNN', '1-interaction-GNN', 'Roberta', 'physnet']: # 1-2-GNN, loopybp, wlkernel
+    if this_dic['model'] in ['1-GNN', '1-interaction-GNN', 'physnet']: # 1-2-GNN, loopybp, wlkernel
         with open(os.path.join(this_dic['running_path'], 'data.txt'), 'w') as f1:
             f1.write(str(table))
         f1.close()
@@ -322,9 +322,9 @@ def loadConfig(path, name='config.json'):
 
 def saveModel(config, epoch, model, bestValError, valError):
     if config['early_stopping']:
-        if bestValError > np.sum(valError):
+        if bestValError > valError:
             patience = 0
-            bestValError = np.sum(valError)
+            bestValError = valError
         else:
             patience += 1
             if patience > config['patience_epochs']:
@@ -334,8 +334,8 @@ def saveModel(config, epoch, model, bestValError, valError):
                 #logging.info('Model saved.')
                 #break
     else:
-        if bestValError > np.sum(valError):
-            bestValError = np.sum(valError)
+        if bestValError > valError:
+            bestValError = valError
             #logging.info('Saving models...')
             torch.save(model.state_dict(), os.path.join(config['running_path'], 'best_model', 'model_best.pt'))
             
@@ -481,10 +481,10 @@ def semi_orthogonal_matrix(N, M, seed=None):
         square_matrix = square_orthogonal_matrix(dim=M, seed=seed)
     return square_matrix[:N, :M]
 
-def getDegreeforPNA(loader):
+def getDegreeforPNA(loader, degree_num):
     from torch_geometric.utils import degree
     
-    deg = torch.zeros(6, dtype=torch.long)
+    deg = torch.zeros(degree_num, dtype=torch.long)
     for data in loader:
         d = degree(data.edge_index[1], num_nodes=data.num_nodes, dtype=torch.long)
         deg += torch.bincount(d, minlength=deg.numel())
@@ -499,8 +499,11 @@ def getScaleandShift_from_scratch(config, loader):
         if 'mol_y' in data:
             train_values.extend(list(data.mol_y.numpy()))
             train_N.extend(list(data.N.numpy()))
-        elif 'mol_sol_wat' in data:
+        elif 'mol_sol_wat' in data and 'mol_gas' not in data:
             train_values.extend(list(data.mol_sol_wat.numpy()))
+            train_N.extend(list(data.N.numpy()))
+        elif 'mol_sol_wat' in data and 'mol_gas' in data: # for multi-task training on Frag20-Aqsol-100K
+            train_values.extend(list(data.mol_gas.numpy()))
             train_N.extend(list(data.N.numpy()))
         elif 'atom_y' or 'y' in data and 'mask' in data:
             # 'atom_y' and 'mask' are in 1-GNN graphs

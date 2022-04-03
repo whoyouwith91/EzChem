@@ -196,7 +196,7 @@ class DMPNN(nn.Module):
         self.emb_dim = config['emb_dim']
         self.layers_per_message = 1
         self.undirected = False
-        self.atom_messages = False
+        self.atom_messages = False # default in ChemProp
         self.aggregation = config['aggregate'] 
         self.num_layer = config['num_layer']
         self.act_fn = activation_func(config)

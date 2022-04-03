@@ -7,7 +7,7 @@ import collections
 
 ######################## Define atom features and bond features ##############
 ATOM_FEATURES = {
-    'atom_symbol': ['H', 'C', 'N', 'O', 'S', 'F', 'I', 'P', 'Cl', 'Br', 'Si', 'B', 'Se', 'As', 'Sn'], #['B', 'Br', 'C', 'Cl', 'F', 'H', 'N', 'O', 'P', 'S'],
+    'atom_symbol': ['H', 'C', 'N', 'O', 'S', 'F', 'I', 'P', 'Cl', 'Br', 'Si', 'B', 'Se'], #['B', 'Br', 'C', 'Cl', 'F', 'H', 'N', 'O', 'P', 'S'],
     'atom_degree': [0, 1, 2, 3, 4, 5],
     'atom_explicitValence': [0, 1, 2, 3, 4, 5, 6],
     'atom_implicitValence': [0, 1, 2, 3, 4, 5],
@@ -18,27 +18,6 @@ ATOM_FEATURES = {
         Chem.rdchem.HybridizationType.SP3D,
         Chem.rdchem.HybridizationType.SP3D2
     ],
-}
-
-'''
-Periodic properties: (in order as)
-Element period #, element group #, atomic weight, VDW atomic radius, 
-covalent atomic radius, ionization energy, electronegativity, 
-election affinity
-'''
-ATOM_FEATURES_PERIODIC = {
-
-    'H': [-1.460954261,-2.88512737,-0.8978528170000001,-1.953788528,-1.809863616,0.535333521,-1.020768417,-0.791439307],
-    'C': [-0.568148879,-0.07850686700000001,-0.601798994,0.112718569,-0.357866064,-0.396995828,-0.425320174,-0.41149686700000004],
-    'B': [-0.568148879,-0.294400752,-0.6341874829999999,1.021981691,-0.099733165,-1.578159015,-1.292973329,-1.147495385],
-    'N': [-0.568148879,0.137387018,-0.548064941,-0.50723356,-0.519199125,0.908584278,0.40830736700000003,-1.3542617030000001],
-    'O': [-0.568148879,0.353280902,-0.494444716,-0.6312239860000001,-0.680532186,0.543308965,1.088819645,-0.264446453],
-    'S': [0.324656502,0.353280902,-0.06227609,0.5260199879999999,0.577865693,-0.755890787,-0.374281753,0.19611245800000002],
-    'F': [-0.568148879,0.569174787,-0.413743398,-1.333836399,-0.970931697,2.060637097,2.007511221,1.138130846],
-    'Cl': [0.324656502,0.569174787,0.02886699,0.319369279,0.481065856,0.28410705,0.61246105,1.345643613],
-    'Br': [1.217461884,0.569174787,1.225136739,0.650010414,1.061864877,-0.176076042,0.272204911,1.157538515],
-    'P': [0.324656502,0.137387018,-0.091500001,0.5260199879999999,0.6423989170000001,-0.70524672,-1.0377812240000002,-0.797410897],
-    'I': [2.110267265,0.569174787,2.48986471,1.2699625429999999,1.674930511,-0.719602519,-0.23817929699999998,0.929125181]
 }
 
 # allowable node and edge features
@@ -163,10 +142,7 @@ class MolGraph:
 
         # Get atom/bond features
         if 'GNN' in model:
-            if not periodic_features:
-                self.f_atoms = [get_atom_features(atom) for atom in mol.GetAtoms()]
-            else: # use periodic table to initialize features
-                self.f_atoms = [ATOM_FEATURES_PERIODIC[atom.GetSymbol()] for atom in mol.GetAtoms()]
+            self.f_atoms = [get_atom_features(atom) for atom in mol.GetAtoms()]
             self.n_atoms = len(self.f_atoms)
 
             for bond in mol.GetBonds():
@@ -236,13 +212,10 @@ class MolGraph_dmpnn:
         self.at_end = []
 
         if 'GNN' in model:
-            if not periodic_features:
-                if ACSF:
-                    self.f_atoms = f_atoms
-                else:
-                    self.f_atoms = [get_atom_features(atom) for atom in mol.GetAtoms()]
-            else: # use periodic table to initialize features
-                self.f_atoms = [ATOM_FEATURES_PERIODIC[atom.GetSymbol()] for atom in mol.GetAtoms()]
+            if ACSF:
+                self.f_atoms = f_atoms
+            else:
+                self.f_atoms = [get_atom_features(atom) for atom in mol.GetAtoms()]
             self.n_atoms = len(self.f_atoms)
 
         # Initialize atom to bond mapping for each atom

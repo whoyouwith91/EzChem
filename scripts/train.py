@@ -30,7 +30,7 @@ def main():
     # ------------------------------------load processed data-----------------------------------------------------------------------------
     this_dic['data_path'] = os.path.join(args.allDataPath, args.dataset, 'graphs', args.model, args.style)
     loader = get_data_loader(this_dic)
-    train_loader, val_loader, test_loader, num_atom_features, num_bond_features, _ = loader.train_loader, loader.val_loader, loader.test_loader, loader.num_features, loader.num_bond_features, loader.num_i_2
+    train_loader, val_loader, test_loader, num_atom_features, num_bond_features = loader.train_loader, loader.val_loader, loader.test_loader, loader.num_features, loader.num_bond_features
     this_dic['num_atom_features'], this_dic['num_bond_features'] = int(num_atom_features), num_bond_features
     this_dic['train_size'], this_dic['val_size'], this_dic['test_size'] = len(train_loader.dataset), len(val_loader.dataset), len(test_loader.dataset)
     
@@ -44,7 +44,9 @@ def main():
         this_dic['n_feature'] = this_dic['emb_dim']
         this_dic = {**this_dic, **physnet_kwargs}
     if this_dic['gnn_type'] == 'pnaconv': #
-        this_dic['deg'], this_dic['deg_value'] = getDegreeforPNA(train_loader)
+        if this_dic['dataset'].startswith('protein'): d = 8 
+        else: d = 6
+        this_dic['deg'], this_dic['deg_value'] = getDegreeforPNA(train_loader, d)
 
     model = get_model(this_dic)
     # model weights initializations
@@ -96,16 +98,16 @@ def main():
     for epoch in range(this_dic['epochs']+1):
         # testing parts
         if this_dic['dataset'] in large_datasets: # see helper about large datasets
-            train_error = loss # coz train set is too large to be tested every epoch
+            train_error = 0. # coz train set is too large to be tested every epoch
         else:
             train_error = test_model(this_dic)(model_, train_loader, this_dic) # test on entire dataset
         if args.optimizer == 'EMA': # physnet
             shadow_model = optimizer.shadow_model
             val_error = test_model(this_dic)(shadow_model, val_loader, this_dic)
-            test_error = test_model(this_dic)(shadow_model, test_loader, this_dic)
+            test_error = test_model(this_dic)(shadow_model, test_loader, this_dic, onData='test')
         else:
             val_error = test_model(this_dic)(model_, val_loader, this_dic) # test on entire dataset
-            test_error = test_model(this_dic)(model_, test_loader, this_dic) # test on entire dataset
+            test_error = test_model(this_dic)(model_, test_loader, this_dic, onData='test') # test on entire dataset
 
         # model saving
         if args.optimizer == 'EMA': # physnet

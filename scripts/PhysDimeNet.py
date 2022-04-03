@@ -182,7 +182,7 @@ class PhysDimeNet(nn.Module):
 
         self.dist_calculator = nn.PairwiseDistance(keepdim=True)
 
-        self.embedding_layer = EmbeddingLayer(n_atom_embedding, n_feature)
+        self.embedding_layer = EmbeddingLayer(n_atom_embedding, n_feature) # if addiing QMD features, substract from the n_feature 
 
         previous_module = 'P'
         '''
@@ -392,7 +392,7 @@ class PhysDimeNet(nn.Module):
         mji: edge diff
         vi:  node diff
         '''
-        vi = self.embedding_layer(Z)
+        vi = self.embedding_layer(Z) # atomic number embedding
 
         # t0 = record_data('diff layer', t0)
 
