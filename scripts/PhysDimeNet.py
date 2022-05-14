@@ -59,6 +59,7 @@ class PhysDimeNet(nn.Module):
                  dropout=False,
                  requires_atom_prop=False,
                  get_atom_embedding=False,
+                 use_qmd=False,
                  **kwargs):
         """
         
@@ -78,6 +79,7 @@ class PhysDimeNet(nn.Module):
         #    print("{}: {}".format(key, kwargs[key]))
 
         #self.logger = logging.getLogger()
+        self.use_qmd = use_qmd
         self.requires_atom_prop = requires_atom_prop
         self.get_atom_embedding = get_atom_embedding
         #if action in tags.requires_atomic_prop:
@@ -182,6 +184,7 @@ class PhysDimeNet(nn.Module):
 
         self.dist_calculator = nn.PairwiseDistance(keepdim=True)
 
+        if self.use_qmd: n_feature = 157
         self.embedding_layer = EmbeddingLayer(n_atom_embedding, n_feature) # if addiing QMD features, substract from the n_feature 
 
         previous_module = 'P'
@@ -393,6 +396,8 @@ class PhysDimeNet(nn.Module):
         vi:  node diff
         '''
         vi = self.embedding_layer(Z) # atomic number embedding
+        if self.use_qmd: 
+            vi = torch.cat([vi, data.qmd_features], axis=-1)
 
         # t0 = record_data('diff layer', t0)
 

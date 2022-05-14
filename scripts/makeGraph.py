@@ -25,7 +25,7 @@ def parse_input_arguments():
     parser = argparse.ArgumentParser(description='Physicochemical prediction')
     parser.add_argument('--dataset', type=str)
     parser.add_argument('--QMD', action='store_true')
-    parser.add_argument('--qm', type=str) # if it's HF, B3LYP or mPW. 
+    parser.add_argument('--solvent', type=str) # if it's HF, B3LYP or mPW. 
     parser.add_argument('--use_crippen', action='store_true')
     parser.add_argument('--use_tpsa', action='store_true')
     parser.add_argument('--file', type=str, default=None) # for file name such as pubchem, zinc, etc in Frag20
@@ -71,6 +71,7 @@ def getMol(file, id_, config):
         path_to_sdf = '/ext3/{}/{}/sdf'.format(data, file)
         sdf_file = os.path.join(path_to_sdf, str(id_)+format_)
     #print(sdf_file)
+    
     suppl = SDMolSupplier(sdf_file, removeHs=config['removeHs'])
     return suppl[0]
 
@@ -147,7 +148,7 @@ def main():
         test_raw = pickle.load(open('/scratch/dz1061/gcn/chemGraph/data/{}/split/test.pickle'.format(args.dataset), 'rb'))
         if args.QMD: 
             #nmr_calc_data = torch.load('/scratch/dz1061/gcn/chemGraph/data/nmr/carbon/split/NMR.pt')
-            nmr_calc_data_normalize = torch.load('/scratch/dz1061/gcn/chemGraph/data/{}/split/nmr_calc_data_norm_{}_eigenvalues.pt'.format(args.dataset, args.qm))
+            nmr_calc_data_normalize = torch.load('/scratch/dz1061/gcn/chemGraph/data/{}/split//QM_nmr_gjf/B3LYP_6-31G_d/{}/nmr_calc_norm.pt'.format(args.dataset, args.solvent))
             #nmr_calc_data_ANI_normalize = torch.load('/scratch/dz1061/gcn/chemGraph/data/{}/split/nmr_calc_data_norm_mPW_ANI.pt'.format(args.dataset))
     elif 'protein/nmr' in this_dic['dataset']: # 
         train_raw = pd.read_pickle(os.path.join(alldatapath, args.dataset, 'split', 'train.pt'))
@@ -211,8 +212,9 @@ def main():
                                 g4_params=[[1, 1, 1], [1, 2, 1], [1, 1, -1], [1, 2, -1]],)
                 if 'sol_calc' in this_dic['dataset']: values = all_data['CalcSol'].tolist()
                 else: values = all_data['calcLogP'].tolist()
-
-                for locid, smi, value, id_, file in zip(range(all_data.shape[0]), all_data['QM_SMILES'], values, all_data['ID'], all_data['SourceFile']):
+                
+                c_test = 0
+                for locid, smi, value, id_, file, split in zip(range(all_data.shape[0]), all_data['QM_SMILES'], values, all_data['ID'], all_data['SourceFile'], all_data['split']):
                     #print(smi, id_, file)
                     molgraphs = {}
                     #mol = Chem.MolFromSmiles(smi)
@@ -284,11 +286,12 @@ def main():
                     #    except:
                     #        molgraphs['atom_efgs'] = None
                     examples.append(molgraphs)
+                    if split == 'test': c_test +=1 
 
                 if not os.path.exists(os.path.join(this_dic['save_path'], args.dataset, args.format, this_dic['model'], args.style, 'raw')):
                     os.makedirs(os.path.join(this_dic['save_path'], args.dataset, args.format, this_dic['model'], args.style, 'raw'))
                 torch.save(examples, os.path.join(this_dic['save_path'], args.dataset, args.format, this_dic['model'], args.style,'raw', 'temp.pt')) ###
-                print('Finishing processing {} compounds'.format(len(examples)))
+                print('Finishing processing {} compounds, among them {} compounds in test set'.format(len(examples), c_test))
 
             elif 'frag14/nmr' in this_dic['dataset']:
                 
@@ -580,7 +583,7 @@ def main():
                             #    species = ['B', 'Br', 'C', 'Cl', 'F', 'H', 'N', 'O', 'P', 'S']
                             periodic = False
                         if this_dic['dataset'] in ['pka/dataWarrior/acidic', 'pka/dataWarrior/basic']:
-                            species = ['B', 'Br', 'C', 'Cl', 'F', 'I', 'N', 'O', 'P', 'S', 'Se', 'Si', 'H', 'As', 'Sn']
+                            species = ['B', 'Br', 'C', 'Cl', 'F', 'I', 'N', 'O', 'P', 'S', 'Si', 'H']
                             if args.train_type in ['FT', 'TL']:
                                 species = ['B', 'Br', 'C', 'Cl', 'F', 'H', 'N', 'O', 'P', 'S']
                             periodic = False

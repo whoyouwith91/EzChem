@@ -44,7 +44,8 @@ def main():
         this_dic['n_feature'] = this_dic['emb_dim']
         this_dic = {**this_dic, **physnet_kwargs}
     if this_dic['gnn_type'] == 'pnaconv': #
-        if this_dic['dataset'].startswith('protein'): d = 8 
+        if this_dic['dataset'].startswith('protein'): d = 8
+        elif 'hydrogen' in this_dic['dataset']: d = 7
         else: d = 6
         this_dic['deg'], this_dic['deg_value'] = getDegreeforPNA(train_loader, d)
 
@@ -146,8 +147,11 @@ def main():
             results.add_row(contents) # updating pretty table 
             saveToResultsFile(results, this_dic, name='data.txt') # save instant data to directory
             best_val_error = saveModel(this_dic, epoch, model_, best_val_error, val_error)
-
-        torch.save(model_.state_dict(), os.path.join(this_dic['running_path'], 'trained_model', 'model_last.pt'))
+        
+        if args.model in ['physnet']: 
+            torch.save(shadow_model.state_dict(), os.path.join(this_dic['running_path'], 'trained_model', 'model_last.pt'))
+        else:
+            torch.save(model_.state_dict(), os.path.join(this_dic['running_path'], 'trained_model', 'model_last.pt'))
 
 if __name__ == "__main__":
     #cycle_index(10,2)

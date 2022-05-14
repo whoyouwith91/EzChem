@@ -91,7 +91,10 @@ def train(model, optimizer, dataloader, config, scheduler=None):
         else: 
             if config['propertyLevel'] == 'molecule': # for single task, like exp solvation, solubility, ect
                 assert config['taskType'] == 'single'
-                loss = get_loss_fn(config['loss'])(y[1], data.mol_y)
+                if config['model'] == 'physnet':
+                    loss = get_loss_fn(config['loss'])(data.mol_y, y['mol_prop'].float().view(-1))
+                else:
+                    loss = get_loss_fn(config['loss'])(y[1], data.mol_y)
                 if config['gnn_type'] == 'dmpnn':
                     all_loss += loss.item() * data.mol_y.shape[0]
                 else:
@@ -194,6 +197,8 @@ def test(model, dataloader, config, onData=''):
                 if config['test_level'] == 'molecule':
                     if config['gnn_type'] == 'dmpnn':
                         error += get_metrics_fn(config['metrics'])(y[1], data.mol_y) * data.mol_y.shape[0]
+                    elif config['model'] == 'physnet':
+                        error += get_metrics_fn(config['metrics'])(y['mol_prop'].float().view(-1), data.mol_y) * data.num_graphs
                     else:
                         error += get_metrics_fn(config['metrics'])(y[1], data.mol_y) * data.num_graphs
                 elif config['test_level'] == 'atom': # nmr/carbon hydrogen

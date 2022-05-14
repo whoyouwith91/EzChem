@@ -369,7 +369,7 @@ def build_lr_scheduler(optimizer, config):
     :param total_epochs: The total number of epochs for which the model will be run.
     :return: An initialized learning rate scheduler.
     """
-    if config['scheduler'] == 'NoamLR':
+    if config['scheduler'] == 'NoamLR': #
         # Learning rate scheduler
         return NoamLR(
             optimizer=optimizer,
@@ -382,8 +382,8 @@ def build_lr_scheduler(optimizer, config):
         )
     elif config['scheduler'] == 'decay':
         return torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 
-                    factor=config['decay_factor'], 
-                    patience=config['patience_epochs'], 
+                    factor=config['decay_factor'], # 0.3 
+                    patience=config['patience_epochs'],  # 20 
                     min_lr=0.00001)
     
     elif config['scheduler'] == 'step':
