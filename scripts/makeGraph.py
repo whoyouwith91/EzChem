@@ -265,7 +265,7 @@ def main():
                             molgraphs['mol_oct'] = torch.FloatTensor([all_data.loc[locid, 'octEnergy'] * 27.2114 - total_ref]) # unit is eV, substracting the atom reference energy 
                             molgraphs['mol_sol_wat'] = torch.FloatTensor([all_data.loc[locid, 'CalcSol']]) * 0.043 # unit is eV
                             molgraphs['mol_sol_oct'] = torch.FloatTensor([all_data.loc[locid, 'CalcOct']]) * 0.043 # unit is eV
-                            molgraphs['mol_sol_logp'] = torch.FloatTensor([all_data.loc[locid, 'calcLogP']])
+                            molgraphs['mol_sol_logp'] = torch.FloatTensor([all_data.loc[locid, 'calcLogP']]) * 0.059 # unit is eV for difference between sol_wat and sol_oct
                         #molgraphs['atom_y'] = torch.FloatTensor([i[0] for i in rdMolDescriptors._CalcCrippenContribs(mol)])
                         molgraphs['N'] = torch.FloatTensor([mol.GetNumAtoms()])
                         if args.dmpnn:

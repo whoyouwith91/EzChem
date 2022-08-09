@@ -22,7 +22,7 @@ def train(model, optimizer, dataloader, config, scheduler=None):
     '''
     model.train()
     all_loss = 0
-    if config['propertyLevel'] == 'atom':
+    if config['propertyLevel'] in ['atom', 'multiAtom']:
         all_atoms = 0
     for data in dataloader:
         data = data.to(config['device'])
@@ -70,14 +70,27 @@ def train(model, optimizer, dataloader, config, scheduler=None):
             else:
                  raise "LossError"
 
-        elif config['dataset'] in ['nmr/carbon', 'nmr/hydrogen', 'qm9/nmr/carbon', 'qm9/nmr/hydrogen', 'frag14/nmr/carbon', 'frag14/nmr/hydrogen', 'protein/nmr', 'protein/nmr/alphaFold']:
-            assert config['propertyLevel'] == 'atom'
-            if config['model'] == 'physnet':
-                loss = get_loss_fn(config['loss'])(data.atom_y[data.mask>0], y['atom_prop'].float().view(-1)[data.mask>0])
-            else:
-                loss = get_loss_fn(config['loss'])(data.atom_y[data.mask>0], y[0].view(-1)[data.mask>0])
-            all_atoms += data.mask.sum() # with mask information
-            all_loss += loss.item()*data.mask.sum()
+        elif config['dataset'] in ['nmr/carbon', 'nmr/hydrogen', 'qm9/nmr/carbon', 'qm9/nmr/hydrogen', 'protein/nmr', 'protein/nmr/alphaFold']:
+                assert config['propertyLevel'] == 'atom'
+                if config['model'] == 'physnet':
+                    loss = get_loss_fn(config['loss'])(data.atom_y[data.mask>0], y['atom_prop'].float().view(-1)[data.mask>0])
+                else:
+                    loss = get_loss_fn(config['loss'])(data.atom_y[data.mask>0], y[0].view(-1)[data.mask>0])
+                all_atoms += data.mask.sum().item() # with mask information
+                all_loss += loss.item()*data.mask.sum()
+        
+        elif config['dataset'] in ['frag14/nmr']:
+            if config['propertyLevel'] == 'atom':
+                loss = get_loss_fn(config['loss'])(data.atom_iso.flatten(), y['atom_prop'].float().flatten())
+            elif config['propertyLevel'] == 'multiAtom':
+                loss = get_loss_fn(config['loss'])(data.atom_eigens[:, 0].flatten(), y['atom_prop'].float()[:, 0].flatten()) + \
+                get_loss_fn(config['loss'])(data.atom_eigens[:, 1].flatten(), y['atom_prop'].float()[:, 1].flatten()) + \
+                get_loss_fn(config['loss'])(data.atom_eigens[:, 2].flatten(), y['atom_prop'].float()[:, 2].flatten()) + \
+                get_loss_fn(config['loss'])(data.atom_iso.flatten(), y['atom_prop'].float().sum(axis=1) / 3.) + \
+                get_loss_fn(config['loss'])(data.atom_ani.flatten(), y['atom_prop'].float()[:, -1] - y['atom_prop'].float()[:, :-1].sum(axis=1) / 2.)
+            all_atoms += data.Z.shape[0] # with mask information
+            all_loss += loss.item()*data.Z.shape[0]
+                    
         
         elif config['dataset'] == 'pka/chembl':
             if config['propertyLevel'] == 'atom': 
@@ -124,8 +137,8 @@ def train(model, optimizer, dataloader, config, scheduler=None):
             return np.sqrt(all_loss.item() / all_atoms.item()) # RMSE for mol level properties.
     
     if config['metrics'] == 'l1':
-        if config['test_level'] == 'atom':
-            return all_loss.item() / all_atoms.item() # MAE
+        if config['propertyLevel'] in ['atom', 'multiAtom']:
+            return all_loss / all_atoms
         elif config['propertyLevel'] in ['multiMol', 'atomMol']:
             return all_loss.item() / len(dataloader.dataset) * 23 # ev --> kcal/mol
         else:
@@ -144,7 +157,7 @@ def test(model, dataloader, config, onData=''):
     if config['propertyLevel'] == 'multiMol':
         from collections import defaultdict
         error = defaultdict(float)
-    if config['test_level'] == 'atom':
+    if config['test_level'] in ['atom', 'multiAtom']:
         total_N = 0
     with torch.no_grad():
         for data in dataloader:
@@ -177,14 +190,23 @@ def test(model, dataloader, config, onData=''):
                 else:
                     raise "MetricsError"
 
-            elif config['dataset'] in ['nmr/carbon', 'nmr/hydrogen', 'qm9/nmr/carbon', 'qm9/nmr/hydrogen', 'frag14/nmr/carbon', 'frag14/nmr/hydrogen', 'protein/nmr', 'protein/nmr/alphaFold']:
-                assert config['test_level'] == 'atom'
-                if config['model'] == 'physnet':
-                    error += get_metrics_fn(config['metrics'])(data.atom_y[data.mask>0], y['atom_prop'].float().view(-1)[data.mask>0])*data.mask.sum().item()
-                else:
-                    error += get_metrics_fn(config['metrics'])(data.atom_y[data.mask>0], y[0].view(-1)[data.mask>0])*data.mask.sum().item()
-                total_N += data.mask.sum().item()
+            elif config['dataset'] in ['nmr/carbon', 'nmr/hydrogen', 'qm9/nmr/carbon', 'qm9/nmr/hydrogen', 'protein/nmr', 'protein/nmr/alphaFold']:
+                    assert config['test_level'] == 'atom'
+                    if config['model'] == 'physnet':
+                        error += get_metrics_fn(config['metrics'])(data.atom_y[data.mask>0], y['atom_prop'].float().view(-1)[data.mask>0])*data.mask.sum().item()
+                    else:
+                        error += get_metrics_fn(config['metrics'])(data.atom_y[data.mask>0], y[0].view(-1)[data.mask>0])*data.mask.sum().item()
+                    total_N += data.mask.sum().item()
             
+            elif config['dataset'] in ['frag14/nmr']:
+                if config['test_level'] == 'multiAtom': 
+                    error += get_metrics_fn(config['metrics'])(data.atom_eigens, y['atom_prop'].float()) * data.Z.shape[0]
+
+                if config['test_level'] == 'atom':
+                    error += get_metrics_fn(config['metrics'])(data.atom_iso.flatten(), y['atom_prop'].float().sum(axis=1) / 3.) * data.Z.shape[0]
+                
+                total_N += data.Z.shape[0]
+
             elif config['dataset'] == 'pka/chembl':
                 if config['propertyLevel'] == 'atom': 
                     error += get_metrics_fn(config['metrics'])(data.mol_y, y[0].view(-1)[data.mask>0]) * data.num_graphs
@@ -213,7 +235,7 @@ def test(model, dataloader, config, onData=''):
             if config['test_level'] == 'atom':
                 return np.sqrt(error.item() / total_N) # RMSE for mol level properties.
         if config['metrics'] == 'l1':
-            if config['test_level'] == 'atom':
+            if config['test_level'] in ['atom', 'multiAtom']:
                 return error.item() / total_N # MAE
             elif config['propertyLevel'] in ['multiMol', 'atomMol']:
                 if onData == 'test':

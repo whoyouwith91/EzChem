@@ -23,7 +23,7 @@ class get_data_loader():
             self.test_index = all_index['test_index']
          self.train_size, self.val_size = config['train_size'], config['val_size']
       else:
-         self.train_size, self.val_size = config['train_size'], config['val_size']
+         self.train_size, self.val_size, self.test_size = config['train_size'], config['val_size'], config['test_size']
          if config['sample'] or config['vary_train_only']:
             self.data_seed = config['data_seed']
       self.train_loader, self.val_loader, self.test_loader, self.num_features, self.num_bond_features = self.graph_loader()
@@ -51,6 +51,8 @@ class get_data_loader():
          if self.config['dataset'] in ['nmr/carbon', 'nmr/hydrogen', 'protein/nmr', 'protein/nmr/alphaFold']:
             dataset = physnet_nmr(root=self.config['data_path'], pre_transform=my_pre_transform)
             #if self.config['dataset'] == 'qm9':
+         elif self.config['dataset'] in ['frag14/nmr']:
+            dataset = physnet_frag14(root=self.config['data_path'], pre_transform=my_pre_transform)
          else:
             dataset = physnet(root=self.config['data_path'], pre_transform=my_pre_transform)
          #dataset = DummyIMDataset(root=self.config['data_path'], dataset_name='processed.pt')
@@ -65,7 +67,7 @@ class get_data_loader():
                   dataset = GraphDataset_dmpnn_mol(root=self.config['data_path'])
                else:
                   dataset = GraphDataset_single(root=self.config['data_path'])
-         elif self.config['dataset'] in ['qm9/nmr/carbon', 'qm9/nmr/carbon/smaller', 'qm9/nmr/hydrogen', 'nmr/hydrogen', 'nmr/carbon', 'frag14/nmr/carbon', 'frag14/nmr/hydrogen', 'protein/nmr', 'protein/nmr/alphaFold']:
+         elif self.config['dataset'] in ['qm9/nmr/carbon', 'qm9/nmr/carbon/smaller', 'qm9/nmr/hydrogen', 'nmr/hydrogen', 'nmr/carbon', 'protein/nmr', 'protein/nmr/alphaFold']:
             if self.config['gnn_type'] == 'dmpnn':
                dataset = GraphDataset_dmpnn_atom(root=self.config['data_path'])
             else:
@@ -98,23 +100,31 @@ class get_data_loader():
 
       if self.config['sample']:
          random.seed(self.data_seed)
-         if self.config['fix_test']: # fixed test and do CV
-            rest_dataset = dataset[:my_split_ratio[0]+my_split_ratio[1]]
-            train_dataset = rest_dataset.index_select(random.sample(range(my_split_ratio[0]+my_split_ratio[1]), my_split_ratio[0]))
-            val_dataset = rest_dataset[list(set(rest_dataset.indices()) - set(train_dataset.indices()))]
-            test_dataset = dataset[my_split_ratio[0]+my_split_ratio[1]:]
-            
-         elif self.config['vary_train_only']: # varying train size and random split for train/valid/test
-            rest_dataset = dataset.index_select(random.sample(range(len(dataset)), my_split_ratio[0]+my_split_ratio[1]))
-            test_dataset = dataset[list(set(dataset.indices()) - set(rest_dataset.indices()))]
-            train_dataset = rest_dataset[:my_split_ratio[0]]
-            val_dataset = rest_dataset[my_split_ratio[0]:my_split_ratio[0]+my_split_ratio[1]]
-            train_dataset = train_dataset.index_select(random.sample(range(my_split_ratio[0]), self.config['sample_size']))
-         else: # random split for train/valid/test
-            rest_dataset = dataset.index_select(random.sample(range(len(dataset)), my_split_ratio[0]+my_split_ratio[1]))
-            test_dataset = dataset[list(set(dataset.indices()) - set(rest_dataset.indices()))]
-            train_dataset = rest_dataset[:my_split_ratio[0]]
-            val_dataset = rest_dataset[my_split_ratio[0]:my_split_ratio[0]+my_split_ratio[1]]
+         if len(dataset) > self.train_size + self.val_size + self.test_size:
+            dataset = dataset.index_select(random.sample(range(len(dataset)), self.train_size + self.val_size + self.test_size))
+            train_dataset = dataset[:self.train_size]
+            val_dataset = dataset[self.train_size:self.train_size + self.val_size]
+            test_dataset = dataset[self.train_size + self.val_size:]
+         else:
+            assert len(dataset) == self.train_size + self.val_size + self.test_size
+
+            if self.config['fix_test']: # fixed test and do CV
+               rest_dataset = dataset[:my_split_ratio[0]+my_split_ratio[1]]
+               train_dataset = rest_dataset.index_select(random.sample(range(my_split_ratio[0]+my_split_ratio[1]), my_split_ratio[0]))
+               val_dataset = rest_dataset[list(set(rest_dataset.indices()) - set(train_dataset.indices()))]
+               test_dataset = dataset[my_split_ratio[0]+my_split_ratio[1]:]
+               
+            elif self.config['vary_train_only']: # varying train size and random split for train/valid/test
+               rest_dataset = dataset.index_select(random.sample(range(len(dataset)), my_split_ratio[0]+my_split_ratio[1]))
+               test_dataset = dataset[list(set(dataset.indices()) - set(rest_dataset.indices()))]
+               train_dataset = rest_dataset[:my_split_ratio[0]]
+               val_dataset = rest_dataset[my_split_ratio[0]:my_split_ratio[0]+my_split_ratio[1]]
+               train_dataset = train_dataset.index_select(random.sample(range(my_split_ratio[0]), self.config['sample_size']))
+            else: # random split for train/valid/test
+               rest_dataset = dataset.index_select(random.sample(range(len(dataset)), my_split_ratio[0]+my_split_ratio[1]))
+               test_dataset = dataset[list(set(dataset.indices()) - set(rest_dataset.indices()))]
+               train_dataset = rest_dataset[:my_split_ratio[0]]
+               val_dataset = rest_dataset[my_split_ratio[0]:my_split_ratio[0]+my_split_ratio[1]]
       
       else: # not sampling
          if not self.config['vary_train_only']:

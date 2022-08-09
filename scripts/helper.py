@@ -1,4 +1,5 @@
 import os, sys, random, math, json, glob, copy
+from collections import defaultdict
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -34,7 +35,7 @@ train_config = ['running_path', 'seed', 'optimizer', 'loss', 'metrics', 'lr', 'l
 large_datasets = ['mp', 'mp_drugs', 'xlogp3', 'calcLogP/ALL', 'sol_calc/smaller', 'sol_calc/all', \
              'solOct_calc/ALL', 'solWithWater_calc/ALL', 'solOctWithWater_calc/ALL', 'calcLogPWithWater/ALL', \
                  'qm9/nmr/carbon', 'qm9/nmr/hydrogen', 'qm9/nmr/allAtoms', 'calcSolLogP/ALL', 'nmr/carbon', 'nmr/hydrogen', \
-                 'solEFGs', 'frag14/nmr/carbon', 'frag14/nmr/hydrogen']
+                 'solEFGs', 'frag14/nmr']
 ###
 
 def getTaskType(config):
@@ -495,6 +496,8 @@ def getScaleandShift_from_scratch(config, loader):
     # loader: train_loader 
     train_values = []
     train_N = []
+    if 'atom_eigens' in loader.dataset.data:
+        shielding_tensors = defaultdict(list)
     for data in loader:
         if 'mol_y' in data:
             train_values.extend(list(data.mol_y.numpy()))
@@ -505,20 +508,36 @@ def getScaleandShift_from_scratch(config, loader):
         elif 'mol_sol_wat' in data and 'mol_gas' in data: # for multi-task training on Frag20-Aqsol-100K
             train_values.extend(list(data.mol_gas.numpy()))
             train_N.extend(list(data.N.numpy()))
-        elif 'atom_y' or 'y' in data and 'mask' in data:
+        elif 'atom_y' in data or 'y' in data and 'mask' in data:
             # 'atom_y' and 'mask' are in 1-GNN graphs
             # 'y' and 'mask' are in physnet graphs
             train_values.extend(list(data.atom_y[data.mask>0].numpy()))
+        elif 'atom_eigens' in data:
+            #train_values.extend(data.atom_eigens.numpy().tolist())
+            for atom_num, eigens in zip(data.Z.tolist(), data.atom_eigens.tolist()):
+                shielding_tensors[atom_num].append(eigens)
         else:
             pass
     #print(len(train_values), len(train_N))
     if 'atom_y' in data or 'y' in data and 'mask' in data:
         shift, scale = np.mean(train_values).item(), np.std(train_values).item()
+    elif 'atom_eigens' in data:
+        #shift, scale = np.append(np.array(train_values).mean(axis=0), 0.0), np.append(np.array(train_values).std(axis=0), 0.0)
+        shift = torch.zeros(95, 4)
+        scale = torch.zeros(95, 4).fill_(1.0)
+        for atom_num, tar in shielding_tensors.items():
+            shift[atom_num, :] = torch.FloatTensor(np.append(np.array(tar).mean(axis=0), 0.0))
+            scale[atom_num, :] = torch.FloatTensor(np.append(np.array(tar).std(axis=0), 0.0))
     else:
         assert len(train_values) == len(train_N)
         shift, scale = atom_mean_std(train_values, train_N, range(len(train_values)))
-    config['energy_shift'], config['energy_shift_value'] = torch.tensor([shift]), shift
-    config['energy_scale'], config['energy_scale_value'] = torch.tensor([scale]), scale
+
+    if 'atom_eigens' in loader.dataset.data:
+        config['energy_shift'], config['energy_shift_value'] = shift, shift.tolist()
+        config['energy_scale'], config['energy_scale_value'] = scale, scale.tolist()
+    else:
+        config['energy_shift'], config['energy_shift_value'] = torch.tensor([shift]), shift
+        config['energy_scale'], config['energy_scale_value'] = torch.tensor([scale]), scale
     return config 
 
 def getElements(dataframe):

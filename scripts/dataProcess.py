@@ -173,6 +173,72 @@ class physnet_nmr(InMemoryDataset):
 
         torch.save(self.collate(data_list), self.processed_paths[0])
 
+class physnet_frag14(InMemoryDataset):
+    
+    #raw_url = ('https://deepchemdata.s3-us-west-1.amazonaws.com/datasets/'
+    #           'molnet_publish/qm9.zip')
+    #raw_url2 = 'https://ndownloader.figshare.com/files/3195404'
+    #processed_url = 'https://pytorch-geometric.com/datasets/qm9_v2.zip'
+
+    def __init__(self, root, transform=None, pre_transform=None,
+                 pre_filter=None):
+        super(physnet_frag14, self).__init__(root, transform, pre_transform, pre_filter)
+        self.data, self.slices = torch.load(self.processed_paths[0])
+
+    @property
+    def raw_file_names(self):
+        return ['frag14_nmr_params.pt']
+
+    @property
+    def processed_file_names(self):
+        return 'processed.pt'
+
+    def process(self):
+        import pandas as pd
+        import numpy as np
+        
+        with open(self.raw_paths[0], 'rb') as f: # modify this function TODO
+            data = torch.load(f)
+
+        data_list = []
+        i = 0
+        for id_, tar in data.items():
+            if not tar: continue  
+            if not os.path.exists('/vast/dz1061/frag14/opt_xyz/{}.xyz'.format(id_)):
+                continue
+            #name = mol.GetProp('_Name')
+            #print(name)
+            
+            #print(id_)
+            atoms = ase_read('/vast/dz1061/frag14/opt_xyz/{}.xyz'.format(id_))
+            N = atoms.get_global_number_of_atoms()
+            #print(N)
+            N_ = torch.tensor(N).view(-1)
+            pos = atoms.get_positions()
+            pos = torch.tensor(pos, dtype=torch.float)
+            z = torch.tensor(mol.get_atomic_numbers(), dtype=torch.long)
+            
+            atom_iso = torch.FloatTensor([v[0] for v in tar])
+            atom_ani = torch.FloatTensor([v[1] for v in tar])
+            atom_eigens = torch.FloatTensor([v[2] for v in tar])
+            
+                    #print(y)
+            data = Data(R=pos, Z=z, atom_iso=atom_iso, atom_ani=atom_ani, atom_eigens=atom_eigens, N=N_)
+                    #print(data)
+
+            if self.pre_filter is not None and not self.pre_filter(data):
+                continue
+            data_edge = self.pre_transform(data, edge_version="cutoff", do_sort_edge=True, cal_efg=False,
+                                        cutoff=10.0, boundary_factor=100., use_center=True, mol=None, cal_3body_term=False,
+                                        bond_atom_sep=False, record_long_range=True)
+                    #print(data_edge[0].keys())
+            data_list.append(data_edge)
+            #if i > 10:
+            #    break
+            i += 1
+
+        torch.save(self.collate(data_list), self.processed_paths[0])
+        
 class GraphDataset_atom_residue(InMemoryDataset):
     def __init__(self,
                  root,
