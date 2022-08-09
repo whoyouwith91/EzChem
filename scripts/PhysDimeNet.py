@@ -60,6 +60,7 @@ class PhysDimeNet(nn.Module):
                  requires_atom_prop=False,
                  get_atom_embedding=False,
                  use_qmd=False,
+                 use_solvent=False,
                  **kwargs):
         """
         
@@ -80,6 +81,7 @@ class PhysDimeNet(nn.Module):
 
         #self.logger = logging.getLogger()
         self.use_qmd = use_qmd
+        self.use_solvent=use_solvent
         self.requires_atom_prop = requires_atom_prop
         self.get_atom_embedding = get_atom_embedding
         #if action in tags.requires_atomic_prop:
@@ -184,8 +186,9 @@ class PhysDimeNet(nn.Module):
 
         self.dist_calculator = nn.PairwiseDistance(keepdim=True)
 
-        if self.use_qmd: n_feature = 157
-        self.embedding_layer = EmbeddingLayer(n_atom_embedding, n_feature) # if addiing QMD features, substract from the n_feature 
+        if self.use_qmd: self.embedding_layer = EmbeddingLayer(n_atom_embedding, 157)
+        elif self.use_solvent: self.embedding_layer = EmbeddingLayer(n_atom_embedding, 148)
+        else: self.embedding_layer = EmbeddingLayer(n_atom_embedding, n_feature) # if addiing QMD features, substract from the n_feature 
 
         previous_module = 'P'
         '''
@@ -272,12 +275,18 @@ class PhysDimeNet(nn.Module):
                 scale_matrix = torch.zeros(95, n_output).type(floating_type).fill_(1.0)
                 if energy_shift is not None:
                     if isinstance(energy_shift, torch.Tensor):
-                        shift_matrix[:, :] = energy_shift.view(1, -1)
+                        if shift_matrix.shape == energy_shift.shape:
+                            shift_matrix = energy_shift
+                        else:
+                            shift_matrix[:, :] = energy_shift.view(1, -1)
                     else:
                         shift_matrix[:, 0] = energy_shift
                 if energy_scale is not None:
                     if isinstance(energy_scale, torch.Tensor):
-                        scale_matrix[:, :] = energy_scale.view(1, -1)
+                        if scale_matrix.shape == energy_scale.shape:
+                            scale_matrix = energy_scale
+                        else:
+                            scale_matrix[:, :] = energy_scale.view(1, -1)
                     else:
                         scale_matrix[:, 0] = energy_scale
                 shift_matrix = shift_matrix / len(self.bonding_type_keys)
@@ -398,6 +407,8 @@ class PhysDimeNet(nn.Module):
         vi = self.embedding_layer(Z) # atomic number embedding
         if self.use_qmd: 
             vi = torch.cat([vi, data.qmd_features], axis=-1)
+        elif self.use_solvent:
+            vi = torch.cat([vi, data.qmd_features, data.solvents], axis=-1)
 
         # t0 = record_data('diff layer', t0)
 
